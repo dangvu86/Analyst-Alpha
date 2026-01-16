@@ -1,0 +1,27 @@
+# Databases (contain sensitive data)
+*.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+.env.*
+*.env
+
+# IDE
+.vscode/
+.idea/
+
+# Temp folders
+temp_repo/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Analysis scripts (local only)
+analyze_*.py
+check_*.py
