@@ -304,111 +304,91 @@ def main():
     st.sidebar.title("⚙️ Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["🏠 Team Overview", "👤 Analyst Detail", "📋 Calculation Detail", "🏆 Leaderboard"]
+        ["📊 Performance Overview", "📋 Calculation Detail", "🏆 Leaderboard"]
     )
     
-    if page == "🏠 Team Overview":
-        render_team_overview(scorecard, meta)
-    elif page == "👤 Analyst Detail":
-        render_analyst_detail(scorecard, meta)
+    if page == "📊 Performance Overview":
+        render_performance_overview(scorecard, meta)
     elif page == "📋 Calculation Detail":
         render_calculation_detail(scorecard)
     elif page == "🏆 Leaderboard":
         render_leaderboard(scorecard)
 
 
-def render_team_overview(scorecard: pd.DataFrame, meta: dict):
-    """Render Team Overview page."""
-    st.subheader("Team Performance Overview")
+def render_performance_overview(scorecard: pd.DataFrame, meta: dict):
+    """Render Performance Overview page (Team + Analyst combined)."""
+    st.subheader("Performance Overview")
     
-    # KPI Cards
-    team_avg_alpha = scorecard['index_value'].mean()
-    best_performer = scorecard.iloc[0]['analyst_name'] if not scorecard.empty else "N/A"
-    best_alpha = scorecard.iloc[0]['ytd_alpha'] if not scorecard.empty else 0
-    above_100 = len(scorecard[scorecard['index_value'] > 1])
-    total_analysts = len(scorecard)
-    avg_hit_rate = scorecard['hit_rate'].mean()
+    # View selector: Team Average or Individual Analyst
+    analyst_options = scorecard[['analyst_name', 'analyst_email']].values.tolist()
+    view_options = ['Team Average'] + [a[0] for a in analyst_options]
     
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Team Avg Alpha", f"{team_avg_alpha:.4f}", f"{(team_avg_alpha - 1) * 100:+.2f}%")
-    with col2:
-        st.metric("Best Performer", best_performer, f"{best_alpha:+.2f}%")
-    with col3:
-        st.metric("Above 1.0", f"{above_100}/{total_analysts}", f"{above_100/total_analysts*100:.0f}%")
-    with col4:
-        st.metric("Avg Hit Rate", f"{avg_hit_rate:.1f}%")
+    selected_view = st.selectbox(
+        "Select View",
+        view_options,
+        index=0
+    )
     
     st.markdown("---")
     
-    # Team Alpha Chart
-    if meta:
-        # Load all analysts' histories and calculate team average
-        all_histories = []
-        for _, row in scorecard.iterrows():
-            history = load_analyst_history(row['analyst_email'])
-            if not history.empty:
-                history = history.set_index('date')['index_value']
-                all_histories.append(history)
-        
-        if all_histories:
-            team_df = pd.DataFrame(all_histories).T
-            team_df['team_avg'] = team_df.mean(axis=1)
-            team_df = team_df.reset_index()
-            team_df = team_df.rename(columns={'index': 'date'})
+    # Display chart based on selection
+    if selected_view == 'Team Average':
+        # Team Average Chart
+        if meta:
+            # Load all analysts' histories and calculate team average
+            all_histories = []
+            for _, row in scorecard.iterrows():
+                history = load_analyst_history(row['analyst_email'])
+                if not history.empty:
+                    history = history.set_index('date')['index_value']
+                    all_histories.append(history)
             
-            # Load VnIndex
+            if all_histories:
+                team_df = pd.DataFrame(all_histories).T
+                team_df['team_avg'] = team_df.mean(axis=1)
+                team_df = team_df.reset_index()
+                team_df = team_df.rename(columns={'index': 'date'})
+                
+                # Load VnIndex
+                vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
+                if not vnindex.empty:
+                    # Merge VnIndex
+                    team_df = team_df.merge(
+                        vnindex.rename(columns={'index_value': 'vnindex_normalized'}),
+                        on='date', how='left'
+                    )
+                
+                fig = create_team_overview_chart(team_df)
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Individual Analyst Chart
+        selected_name = selected_view
+        
+        # Get analyst email
+        selected_email = None
+        for name, email in analyst_options:
+            if name == selected_name:
+                selected_email = email
+                break
+        
+        # Load history (cached per analyst)
+        alpha_history = load_analyst_history(selected_email)
+        
+        # Alpha Index History Chart
+        if not alpha_history.empty and meta:
+            # Load active tickers and merge
+            ticker_list = load_analyst_ticker_list(selected_email)
+            if not ticker_list.empty:
+                alpha_history = alpha_history.merge(ticker_list, on='date', how='left')
+            
             vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
-            if not vnindex.empty:
-                # Merge VnIndex
-                team_df = team_df.merge(
-                    vnindex.rename(columns={'index_value': 'vnindex_normalized'}),
-                    on='date', how='left'
-                )
             
-            fig = create_team_overview_chart(team_df)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Methodology explanation
-    with st.expander("📐 Cách tính Team Index và VnIndex"):
-        st.markdown("""
-        ### 📊 Team Average (Đường xanh dương)
-        
-        **Công thức:**
-        ```
-        Team Average = (Index₁ + Index₂ + ... + Index₁₅) / 15
-        ```
-        
-        Với mỗi ngày giao dịch, Team Average là **trung bình cộng đơn giản** của Alpha Index 
-        của tất cả 15 analysts vào ngày đó.
-        
-        ---
-        
-        ### 📈 VnIndex (Đường ghi đậm)
-        
-        **Cách normalize:**
-        ```
-        Normalized VnIndex = (Giá VnIndex ngày hiện tại / Giá VnIndex ngày đầu tiên) × 100
-        ```
-        
-        - VnIndex được **normalized về 100** tại điểm bắt đầu (2020-01-01)
-        - Điều này cho phép so sánh trực tiếp với Alpha Index (cũng bắt đầu từ 100)
-        
-        **Ví dụ:**
-        - Nếu VnIndex ngày 1/1/2020 = 960
-        - VnIndex ngày 1/1/2026 = 1250
-        - Normalized = 1250 / 960 × 100 = **130.2**
-        
-        ---
-        
-        ### ✅ Diễn giải
-        
-        - **Team Average > VnIndex**: Team outperform thị trường
-        - **Team Average < VnIndex**: Team underperform thị trường
-        - **Analyst Index > 100**: Analyst tạo ra alpha dương
-        - **Analyst Index < 100**: Analyst tạo ra alpha âm
-        """)
+            if not vnindex.empty:
+                fig = create_alpha_vs_vnindex_chart(
+                    alpha_history, vnindex,
+                    title=f"Alpha Index History - {selected_name}"
+                )
+                st.plotly_chart(fig, use_container_width=True)
     
     st.markdown("---")
     
@@ -428,79 +408,6 @@ def render_team_overview(scorecard: pd.DataFrame, meta: dict):
     display_df['Conviction %'] = display_df['Conviction %'].apply(lambda x: f"{x:.1f}")
     
     st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-
-def render_analyst_detail(scorecard: pd.DataFrame, meta: dict):
-    """Render Individual Analyst Detail page."""
-    st.subheader("Individual Analyst Performance")
-    
-    # Analyst selector
-    analyst_options = scorecard[['analyst_name', 'analyst_email']].values.tolist()
-    selected_name = st.selectbox(
-        "Select Analyst", 
-        [a[0] for a in analyst_options]
-    )
-    
-    # Get analyst email
-    selected_email = None
-    for name, email in analyst_options:
-        if name == selected_name:
-            selected_email = email
-            break
-    
-    # Get analyst summary
-    analyst_row = scorecard[scorecard['analyst_name'] == selected_name].iloc[0]
-    
-    # Load history (cached per analyst)
-    alpha_history = load_analyst_history(selected_email)
-    
-    # KPI Cards
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Alpha Index", f"{analyst_row['index_value']:.2f}", 
-                  f"{analyst_row['ytd_alpha']:+.2f}%")
-    with col2:
-        st.metric("Hit Rate", f"{analyst_row['hit_rate']:.1f}%")
-    with col3:
-        ir = analyst_row['information_ratio']
-        st.metric("Info Ratio", f"{ir:.2f}" if pd.notna(ir) else "N/A")
-    with col4:
-        st.metric("Conviction", f"{analyst_row['conviction']:.1f}%",
-                  f"OPF:{analyst_row['opf_count']} UPF:{analyst_row['upf_count']} MPF:{analyst_row['mpf_count']}")
-    
-    st.markdown("---")
-    
-    # Alpha Index History Chart
-    if not alpha_history.empty and meta:
-        # Load active tickers and merge
-        ticker_list = load_analyst_ticker_list(selected_email)
-        if not ticker_list.empty:
-            alpha_history = alpha_history.merge(ticker_list, on='date', how='left')
-        
-        vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
-        
-        if not vnindex.empty:
-            fig = create_alpha_vs_vnindex_chart(
-                alpha_history, vnindex,
-                title=f"Alpha Index History - {selected_name}"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Daily Alpha Bar Chart
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if not alpha_history.empty:
-            fig = create_daily_alpha_bars(alpha_history, days=30)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        st.markdown("##### Rating Distribution")
-        st.write(f"- **OPF (Outperform):** {analyst_row['opf_count']}")
-        st.write(f"- **UPF (Underperform):** {analyst_row['upf_count']}")
-        st.write(f"- **MPF (Market Perform):** {analyst_row['mpf_count']}")
-        st.write(f"- **Total Coverage:** {analyst_row['coverage']}")
 
 
 def render_leaderboard(scorecard: pd.DataFrame):
