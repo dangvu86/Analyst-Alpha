@@ -1,5 +1,7 @@
-# Databases (contain sensitive data)
-*.db
+# Databases (source data - do not upload)
+adjusted_prices.db
+recommendation_history.db
+# alpha_index.db is intentionally tracked (pre-calculated output)
 
 # Python cache
 __pycache__/

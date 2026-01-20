@@ -14,13 +14,26 @@ def create_alpha_vs_vnindex_chart(analyst_data: pd.DataFrame, vnindex_data: pd.D
     # Convert index to % performance: (index - 1) * 100
     perf_data = (analyst_data['index_value'] - 1) * 100
     
+    # Build hover text manually for full control
+    if 'active_tickers' in analyst_data.columns:
+        hover_text = analyst_data.apply(
+            lambda row: f"<b>{row['date']}</b><br><b>Performance:</b> {(row['index_value']-1)*100:+.1f}%<br><b>Active Ratings:</b><br>{row['active_tickers'] if pd.notna(row['active_tickers']) else 'N/A'}", 
+            axis=1
+        )
+    else:
+        hover_text = analyst_data.apply(
+            lambda row: f"<b>{row['date']}</b><br><b>Performance:</b> {(row['index_value']-1)*100:+.1f}%", 
+            axis=1
+        )
+
     # Alpha Performance line
     fig.add_trace(go.Scatter(
         x=analyst_data['date'],
         y=perf_data,
         name='Alpha Performance',
         line=dict(color=COLORS['primary'], width=3),
-        hovertemplate='%{y:+.2f}%<extra></extra>'
+        hovertext=hover_text,
+        hoverinfo='text'
     ))
     
     # Reference line at 0%
@@ -30,7 +43,6 @@ def create_alpha_vs_vnindex_chart(analyst_data: pd.DataFrame, vnindex_data: pd.D
         title=title,
         xaxis_title='Date',
         yaxis_title='Performance (%)',
-        hovermode='x unified',
         legend=dict(orientation='h', yanchor='bottom', y=1.02),
         template='plotly_white',
         height=400

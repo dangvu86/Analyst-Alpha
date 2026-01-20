@@ -173,12 +173,10 @@ def calculate_and_save(start_date_str: str, end_date_str: str):
     
     conn = sqlite3.connect(ALPHA_INDEX_DB)
     
-    # Clear existing data for this date range
-    conn.execute("DELETE FROM AnalystAlphaDaily WHERE trade_date BETWEEN ? AND ?", 
-                 (start_date_str, end_date_str))
-    conn.execute("DELETE FROM AnalystSummary WHERE as_of_date = ?", (end_date_str,))
-    conn.execute("DELETE FROM DailyContributions WHERE trade_date BETWEEN ? AND ?",
-                 (start_date_str, end_date_str))
+    # Clear ALL existing data to ensure clean start
+    conn.execute("DELETE FROM AnalystAlphaDaily")
+    conn.execute("DELETE FROM AnalystSummary")
+    conn.execute("DELETE FROM DailyContributions")
     conn.commit()
     
     total_records = 0
@@ -324,7 +322,7 @@ def main():
     create_alpha_index_db()
     
     # Default: From 2020-01-01 to today
-    start_date = datetime(2020, 1, 1)
+    start_date = datetime(2023, 1, 1)
     end_date = datetime.now()
     
     start_date_str = start_date.strftime("%Y-%m-%d")

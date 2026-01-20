@@ -130,6 +130,43 @@ def load_analyst_history(analyst_email: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def load_analyst_ticker_list(analyst_email: str) -> pd.DataFrame:
+    """Load list of active tickers and their contributions per date."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    # Fetch raw data with priority ordering
+    df = pd.read_sql_query("""
+        SELECT 
+            trade_date as date, 
+            ticker,
+            recommendation,
+            CASE 
+                WHEN recommendation IN ('OUTPERFORM', 'BUY') THEN 1
+                WHEN recommendation = 'MARKET-PERFORM' THEN 2
+                WHEN recommendation IN ('UNDER-PERFORM', 'UNDERPERFORM', 'AVOID', 'SELL') THEN 3
+                ELSE 4
+            END as rec_priority
+        FROM DailyContributions
+        WHERE analyst_email = ?
+        ORDER BY trade_date, rec_priority, ticker
+    """, conn, params=(analyst_email,))
+    
+    conn.close()
+    
+    if df.empty:
+        return pd.DataFrame(columns=['date', 'active_tickers'])
+        
+    # Format: "Ticker   Recommendation" with fixed-width ticker for alignment
+    df['info'] = df.apply(lambda x: f"{x['ticker'].ljust(5).replace(' ', '&nbsp;')}{x['recommendation']}", axis=1)
+    
+    # Group by date and join with HTML break
+    grouped = df.groupby('date')['info'].apply(lambda x: '<br>'.join(x)).reset_index()
+    grouped.columns = ['date', 'active_tickers']
+    
+    return grouped
+
+
+@st.cache_data(ttl=3600)
 def load_meta_info() -> dict:
     """Load calculation metadata."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -436,6 +473,11 @@ def render_analyst_detail(scorecard: pd.DataFrame, meta: dict):
     
     # Alpha Index History Chart
     if not alpha_history.empty and meta:
+        # Load active tickers and merge
+        ticker_list = load_analyst_ticker_list(selected_email)
+        if not ticker_list.empty:
+            alpha_history = alpha_history.merge(ticker_list, on='date', how='left')
+        
         vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
         
         if not vnindex.empty:
@@ -623,6 +665,13 @@ def render_calculation_detail(scorecard: pd.DataFrame):
         2. **Contribution** = Direction Weight × Excess Return
         3. **Daily Alpha** = Average of all Contributions
         4. **Index Update** = Previous Index × (1 + Daily Alpha / 100)
+        
+        ### 🔄 Stock Transfer Logic (Current Owner):
+        - A stock belongs to **only one analyst** at a time (the "Current Owner").
+        - **Current Owner** is defined as the analyst with the **most recent** recommendation.
+        - When a new analyst issues a report for a stock:
+            - Ownership **transfers immediately** to the new analyst.
+            - The stock **stops contributing** to the previous analyst's performance.
         
         ### Direction Weights:
         - **OPF (Outperform, BUY)**: +1.0 → Bullish, positive contribution when stock beats index
