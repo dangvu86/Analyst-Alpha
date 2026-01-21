@@ -31,7 +31,8 @@ from data.database import (
 from data.calculations import (
     calculate_daily_returns, calculate_analyst_alpha_index,
     calculate_analyst_summary, get_active_ratings_on_date,
-    calculate_analyst_daily_alpha
+    calculate_analyst_daily_alpha, calculate_analyst_daily_alpha_peer,
+    calculate_analyst_alpha_index_peer
 )
 
 # Output database
@@ -118,9 +119,73 @@ def create_alpha_index_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_contrib_analyst ON DailyContributions(analyst_email)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_contrib_date ON DailyContributions(trade_date)")
     
+    # ===== PEER COMPARISON TABLES =====
+    
+    # Table for peer-based analyst daily alpha history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS PeerAnalystAlphaDaily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analyst_email TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            daily_alpha REAL,
+            index_value REAL,
+            hits INTEGER,
+            total INTEGER,
+            cumulative_hits INTEGER,
+            cumulative_total INTEGER,
+            UNIQUE(analyst_email, trade_date)
+        )
+    """)
+    
+    # Table for peer-based analyst summary (scorecard)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS PeerAnalystSummary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analyst_email TEXT NOT NULL,
+            analyst_name TEXT,
+            as_of_date TEXT NOT NULL,
+            index_value REAL,
+            ytd_alpha REAL,
+            hit_rate REAL,
+            information_ratio REAL,
+            conviction REAL,
+            coverage INTEGER,
+            opf_count INTEGER,
+            upf_count INTEGER,
+            mpf_count INTEGER,
+            UNIQUE(analyst_email, as_of_date)
+        )
+    """)
+    
+    # Table for peer-based daily stock-level contributions
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS PeerDailyContributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analyst_email TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            recommendation TEXT,
+            direction_weight REAL,
+            stock_return REAL,
+            peer_return REAL,
+            excess_return REAL,
+            contribution REAL,
+            is_correct INTEGER,
+            UNIQUE(analyst_email, trade_date, ticker)
+        )
+    """)
+    
+    # Indexes for peer tables
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_alpha_analyst ON PeerAnalystAlphaDaily(analyst_email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_alpha_date ON PeerAnalystAlphaDaily(trade_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_summary_analyst ON PeerAnalystSummary(analyst_email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_summary_date ON PeerAnalystSummary(as_of_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_contrib_analyst ON PeerDailyContributions(analyst_email)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_contrib_date ON PeerDailyContributions(trade_date)")
+    
     conn.commit()
     conn.close()
-    print("✅ Created alpha_index.db with tables")
+    print("✅ Created alpha_index.db with tables (including Peer Comparison)")
 
 
 def load_source_data(start_date_str: str, end_date_str: str) -> dict:
@@ -177,6 +242,10 @@ def calculate_and_save(start_date_str: str, end_date_str: str):
     conn.execute("DELETE FROM AnalystAlphaDaily")
     conn.execute("DELETE FROM AnalystSummary")
     conn.execute("DELETE FROM DailyContributions")
+    # Clear Peer tables
+    conn.execute("DELETE FROM PeerAnalystAlphaDaily")
+    conn.execute("DELETE FROM PeerAnalystSummary")
+    conn.execute("DELETE FROM PeerDailyContributions")
     conn.commit()
     
     total_records = 0
@@ -291,8 +360,87 @@ def calculate_and_save(start_date_str: str, end_date_str: str):
             mpf_count
         ))
         
+        # ===== PEER-BASED ALPHA CALCULATION =====
+        
+        # Calculate peer-based alpha history
+        peer_alpha_history = calculate_analyst_alpha_index_peer(
+            analyst, start_date_str, end_date_str,
+            data['recommendations'], data['returns'], data['trading_dates']
+        )
+        
+        # Save peer daily alpha to database
+        for _, row in peer_alpha_history.iterrows():
+            conn.execute("""
+                INSERT OR REPLACE INTO PeerAnalystAlphaDaily 
+                (analyst_email, trade_date, daily_alpha, index_value, hits, total, cumulative_hits, cumulative_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                analyst,
+                row['date'],
+                row['daily_alpha'],
+                row['index_value'],
+                row['hits'],
+                row['total'],
+                row['cumulative_hits'],
+                row['cumulative_total']
+            ))
+        
+        # Save peer stock-level contributions for each trading day
+        for trade_date in data['trading_dates']:
+            if trade_date < start_date_str or trade_date > end_date_str:
+                continue
+            
+            # Calculate peer daily details with stock-level breakdown
+            peer_daily_result = calculate_analyst_daily_alpha_peer(
+                analyst, trade_date, data['recommendations'], data['returns']
+            )
+            
+            # Save each peer stock contribution
+            for contrib in peer_daily_result['contributions']:
+                conn.execute("""
+                    INSERT OR REPLACE INTO PeerDailyContributions
+                    (analyst_email, trade_date, ticker, recommendation, direction_weight,
+                     stock_return, peer_return, excess_return, contribution, is_correct)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    analyst,
+                    trade_date,
+                    contrib['ticker'],
+                    contrib['recommendation'],
+                    contrib['direction'],
+                    contrib['stock_return'],
+                    contrib['peer_return'],
+                    contrib['excess_return'],
+                    contrib['contribution'],
+                    1 if contrib['is_correct'] else 0
+                ))
+        
+        # Calculate peer summary
+        peer_summary = calculate_analyst_summary(analyst, peer_alpha_history)
+        
+        # Save peer summary
+        conn.execute("""
+            INSERT OR REPLACE INTO PeerAnalystSummary
+            (analyst_email, analyst_name, as_of_date, index_value, ytd_alpha, hit_rate, 
+             information_ratio, conviction, coverage, opf_count, upf_count, mpf_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            analyst,
+            analyst_name,
+            end_date_str,
+            peer_summary['index_value'],
+            peer_summary['ytd_alpha'],
+            peer_summary['hit_rate'],
+            peer_summary['information_ratio'],
+            conviction,
+            total_count,
+            opf_count,
+            upf_count,
+            mpf_count
+        ))
+        
         valid_analysts += 1
-        print(f"✅ {len(alpha_history)} days, Index={summary['index_value']:.2f}")
+        print(f"✅ {len(alpha_history)} days, VnIndex Index={summary['index_value']:.2f}, Peer Index={peer_summary['index_value']:.2f}")
     
     # Save meta info
     conn.execute("""

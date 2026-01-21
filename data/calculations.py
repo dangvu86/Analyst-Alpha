@@ -159,6 +159,110 @@ def calculate_analyst_daily_alpha(
     }
 
 
+def calculate_analyst_daily_alpha_peer(
+    analyst_email: str,
+    trade_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    all_active_tickers_returns: dict = None
+) -> dict:
+    """
+    Calculate daily alpha for an analyst using PEER BENCHMARK.
+    
+    Benchmark = Average return of all active stocks in the analyst's coverage list.
+    
+    Args:
+        analyst_email: Analyst email
+        trade_date: Trading date
+        recommendations_df: All recommendations
+        prices_df: Price returns dataframe (already calculated returns)
+        all_active_tickers_returns: Optional pre-calculated dict of {ticker: return} for all active tickers
+    
+    Returns dict with:
+        - daily_alpha: the weighted average alpha contribution
+        - hits: number of correct calls
+        - total: total number of rated stocks
+        - contributions: list of individual contributions
+        - avg_peer_return: the average return of all active stocks (for reference)
+    """
+    # Get active ratings for this analyst on this date
+    active_ratings = get_active_ratings_on_date(recommendations_df, trade_date, analyst_email)
+    
+    if active_ratings.empty:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': [], 'avg_peer_return': 0}
+    
+    # Collect returns for all active tickers of this analyst
+    ticker_returns = {}
+    for _, rating in active_ratings.iterrows():
+        ticker = rating['Ticker']
+        if ticker in prices_df.columns and trade_date in prices_df.index:
+            ret = prices_df.loc[trade_date, ticker]
+            if pd.notna(ret):
+                ticker_returns[ticker] = ret
+    
+    if not ticker_returns:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': [], 'avg_peer_return': 0}
+    
+    # Calculate average peer return (equal-weighted)
+    avg_peer_return = np.mean(list(ticker_returns.values()))
+    
+    # Calculate contribution for each rated stock
+    contributions = []
+    hits = 0
+    
+    for _, rating in active_ratings.iterrows():
+        ticker = rating['Ticker']
+        direction = rating['Direction']
+        recommendation = rating['Recommendation']
+        
+        # Get stock return for this date
+        if ticker not in ticker_returns:
+            continue
+        
+        stock_return = ticker_returns[ticker]
+        
+        # Calculate excess return vs peer average
+        excess_return = stock_return - avg_peer_return
+        contribution = direction * excess_return
+        
+        # Check if call was correct
+        is_correct = False
+        if direction > 0 and excess_return > 0:  # OPF and beat peers
+            is_correct = True
+        elif direction < 0 and excess_return < 0:  # UPF/MPF and trail peers
+            is_correct = True
+        
+        if is_correct:
+            hits += 1
+        
+        contributions.append({
+            'ticker': ticker,
+            'recommendation': recommendation,
+            'direction': direction,
+            'stock_return': stock_return,
+            'peer_return': avg_peer_return,
+            'excess_return': excess_return,
+            'contribution': contribution,
+            'is_correct': is_correct
+        })
+    
+    # Calculate daily alpha as average contribution
+    if contributions:
+        daily_alpha = np.mean([c['contribution'] for c in contributions])
+        total = len(contributions)
+    else:
+        daily_alpha = 0
+        total = 0
+    
+    return {
+        'daily_alpha': daily_alpha,
+        'hits': hits,
+        'total': total,
+        'contributions': contributions,
+        'avg_peer_return': avg_peer_return
+    }
+
+
 def calculate_analyst_alpha_index(
     analyst_email: str,
     start_date: str,
@@ -192,6 +296,64 @@ def calculate_analyst_alpha_index(
         # Calculate daily metrics
         daily_result = calculate_analyst_daily_alpha(
             analyst_email, date, recommendations_df, prices_df, vnindex_returns
+        )
+        
+        daily_alpha = daily_result['daily_alpha']
+        hits = daily_result['hits']
+        total = daily_result['total']
+        
+        # Update index value (compound)
+        index_value = index_value * (1 + daily_alpha / 100)
+        
+        # Update cumulative counts
+        cumulative_hits += hits
+        cumulative_total += total
+        
+        results.append({
+            'date': date,
+            'daily_alpha': daily_alpha,
+            'index_value': index_value,
+            'hits': hits,
+            'total': total,
+            'cumulative_hits': cumulative_hits,
+            'cumulative_total': cumulative_total
+        })
+    
+    return pd.DataFrame(results)
+
+
+def calculate_analyst_alpha_index_peer(
+    analyst_email: str,
+    start_date: str,
+    end_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    trading_dates: list
+) -> pd.DataFrame:
+    """
+    Calculate Alpha Index history for an analyst using PEER BENCHMARK.
+    
+    Returns DataFrame with columns:
+        - date: trading date
+        - daily_alpha: daily alpha contribution
+        - index_value: cumulative index value (starts at 1.0)
+        - hits: daily hit count
+        - total: daily total rated stocks
+        - cumulative_hits: running total of hits
+        - cumulative_total: running total of rated stocks
+    """
+    results = []
+    index_value = 1.0
+    cumulative_hits = 0
+    cumulative_total = 0
+    
+    for date in trading_dates:
+        if date < start_date or date > end_date:
+            continue
+        
+        # Calculate daily metrics using peer benchmark
+        daily_result = calculate_analyst_daily_alpha_peer(
+            analyst_email, date, recommendations_df, prices_df
         )
         
         daily_alpha = daily_result['daily_alpha']

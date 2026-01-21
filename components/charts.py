@@ -146,7 +146,7 @@ def create_hit_rate_gauge(hit_rate: float, title: str = "Hit Rate") -> go.Figure
     return fig
 
 
-def create_team_overview_chart(team_data: pd.DataFrame) -> go.Figure:
+def create_team_overview_chart(team_data: pd.DataFrame, benchmark_label: str = None) -> go.Figure:
     """Create team alpha performance chart in %."""
     fig = go.Figure()
     
@@ -162,16 +162,70 @@ def create_team_overview_chart(team_data: pd.DataFrame) -> go.Figure:
         ))
     
     # Reference line at 0%
-    fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+    fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5,
+                  annotation_text=benchmark_label or "Benchmark = 0%", 
+                  annotation_position="right")
+    
+    title = 'Team Alpha vs VNIndex'
+    if benchmark_label:
+        title = 'Team Alpha vs Coverage'
     
     fig.update_layout(
-        title='Team Alpha Performance',
+        title=title,
         xaxis_title='Date',
         yaxis_title='Performance (%)',
         hovermode='x unified',
         legend=dict(orientation='h', yanchor='bottom', y=1.02),
         template='plotly_white',
         height=450
+    )
+    
+    return fig
+
+
+def create_peer_alpha_chart(analyst_data: pd.DataFrame, title: str = "Peer Alpha Performance") -> go.Figure:
+    """
+    Create line chart showing analyst peer-based alpha performance in %.
+    Similar to create_alpha_vs_vnindex_chart but for peer benchmark.
+    """
+    fig = go.Figure()
+    
+    # Convert index to % performance: (index - 1) * 100
+    perf_data = (analyst_data['index_value'] - 1) * 100
+    
+    # Build hover text manually for full control
+    if 'active_tickers' in analyst_data.columns:
+        hover_text = analyst_data.apply(
+            lambda row: f"<b>{row['date']}</b><br><b>Performance:</b> {(row['index_value']-1)*100:+.1f}%<br><b>Active Ratings:</b><br>{row['active_tickers'] if pd.notna(row['active_tickers']) else 'N/A'}", 
+            axis=1
+        )
+    else:
+        hover_text = analyst_data.apply(
+            lambda row: f"<b>{row['date']}</b><br><b>Performance:</b> {(row['index_value']-1)*100:+.1f}%", 
+            axis=1
+        )
+
+    # Alpha Performance line
+    fig.add_trace(go.Scatter(
+        x=analyst_data['date'],
+        y=perf_data,
+        name='Peer Alpha Performance',
+        line=dict(color=COLORS['primary'], width=3),
+        hovertext=hover_text,
+        hoverinfo='text'
+    ))
+    
+    # Reference line at 0% (peer average = 0)
+    fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5,
+                  annotation_text="Peer Avg = 0%", annotation_position="right")
+    
+    fig.update_layout(
+        title=title,
+        xaxis_title='Date',
+        yaxis_title='Performance vs Peers (%)',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02),
+        template='plotly_white',
+        height=400
     )
     
     return fig

@@ -266,6 +266,124 @@ def get_available_dates(analyst_email: str) -> list:
     return df['trade_date'].tolist()
 
 
+# ===== PEER COMPARISON DATA LOADING FUNCTIONS =====
+
+@st.cache_data(ttl=3600)
+def load_peer_scorecard() -> pd.DataFrame:
+    """Load analyst scorecard from peer-based calculation."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    # Get the latest as_of_date
+    latest_date = pd.read_sql_query(
+        "SELECT MAX(as_of_date) as max_date FROM PeerAnalystSummary", conn
+    ).iloc[0]['max_date']
+    
+    # Load scorecard for latest date
+    df = pd.read_sql_query("""
+        SELECT 
+            analyst_email,
+            analyst_name,
+            index_value,
+            ytd_alpha,
+            hit_rate,
+            information_ratio,
+            conviction,
+            coverage,
+            opf_count,
+            upf_count,
+            mpf_count
+        FROM PeerAnalystSummary
+        WHERE as_of_date = ?
+        ORDER BY index_value DESC
+    """, conn, params=(latest_date,))
+    
+    conn.close()
+    
+    # Add rank
+    df['rank'] = range(1, len(df) + 1)
+    
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_peer_analyst_history(analyst_email: str) -> pd.DataFrame:
+    """Load peer-based alpha history for a specific analyst."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    df = pd.read_sql_query("""
+        SELECT 
+            trade_date as date,
+            daily_alpha,
+            index_value,
+            hits,
+            total,
+            cumulative_hits,
+            cumulative_total
+        FROM PeerAnalystAlphaDaily
+        WHERE analyst_email = ?
+        ORDER BY trade_date
+    """, conn, params=(analyst_email,))
+    
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_peer_daily_contributions(analyst_email: str, trade_date: str = None) -> pd.DataFrame:
+    """Load peer-based stock-level contributions for an analyst."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    if trade_date:
+        df = pd.read_sql_query("""
+            SELECT 
+                trade_date,
+                ticker,
+                recommendation,
+                direction_weight,
+                stock_return,
+                peer_return,
+                excess_return,
+                contribution,
+                is_correct
+            FROM PeerDailyContributions
+            WHERE analyst_email = ? AND trade_date = ?
+            ORDER BY contribution DESC
+        """, conn, params=(analyst_email, trade_date))
+    else:
+        df = pd.read_sql_query("""
+            SELECT 
+                trade_date,
+                ticker,
+                recommendation,
+                direction_weight,
+                stock_return,
+                peer_return,
+                excess_return,
+                contribution,
+                is_correct
+            FROM PeerDailyContributions
+            WHERE analyst_email = ?
+            ORDER BY trade_date DESC, contribution DESC
+        """, conn, params=(analyst_email,))
+    
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def get_peer_available_dates(analyst_email: str) -> list:
+    """Get list of available trading dates for peer comparison."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    df = pd.read_sql_query("""
+        SELECT DISTINCT trade_date 
+        FROM PeerDailyContributions 
+        WHERE analyst_email = ?
+        ORDER BY trade_date DESC
+    """, conn, params=(analyst_email,))
+    conn.close()
+    return df['trade_date'].tolist()
+
+
 def main():
     """Main application."""
     st.markdown('<h1 class="main-header">📊 Analyst Alpha Dashboard <span class="fast-badge">⚡ Fast</span></h1>', 
@@ -295,6 +413,7 @@ def main():
     # Load scorecard (cached, very fast)
     with st.spinner("Loading data..."):
         scorecard = load_scorecard()
+        peer_scorecard = load_peer_scorecard()
     
     if scorecard.empty:
         st.warning("No analyst data available.")
@@ -304,13 +423,15 @@ def main():
     st.sidebar.title("⚙️ Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["📊 Performance Overview", "📋 Calculation Detail", "🏆 Leaderboard"]
+        ["📊 Performance Overview", "🔄 Peer Comparison", "📋 Calculation Detail", "🏆 Leaderboard"]
     )
     
     if page == "📊 Performance Overview":
         render_performance_overview(scorecard, meta)
+    elif page == "🔄 Peer Comparison":
+        render_peer_comparison(peer_scorecard, meta)
     elif page == "📋 Calculation Detail":
-        render_calculation_detail(scorecard)
+        render_calculation_detail(scorecard, peer_scorecard)
     elif page == "🏆 Leaderboard":
         render_leaderboard(scorecard)
 
@@ -410,6 +531,101 @@ def render_performance_overview(scorecard: pd.DataFrame, meta: dict):
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
+def render_peer_comparison(peer_scorecard: pd.DataFrame, meta: dict):
+    """Render Peer Comparison page - using average peer return as benchmark."""
+    st.subheader("🔄 Peer Comparison")
+    
+    st.info("""
+    **Peer Comparison** so sánh hiệu suất của mỗi cổ phiếu với **trung bình return của tất cả cổ phiếu trong list cover** 
+    (thay vì so với VnIndex như trang Performance Overview).
+    
+    - **Benchmark**: Avg Return của list cover (equal-weighted)
+    - **Excess Return** = Stock Return - Avg Peer Return
+    """)
+    
+    # View selector: Team Average or Individual Analyst
+    analyst_options = peer_scorecard[['analyst_name', 'analyst_email']].values.tolist()
+    view_options = ['Team Average'] + [a[0] for a in analyst_options]
+    
+    selected_view = st.selectbox(
+        "Select View",
+        view_options,
+        index=0,
+        key="peer_view_selector"
+    )
+    
+    st.markdown("---")
+    
+    # Display chart based on selection
+    if selected_view == 'Team Average':
+        # Team Average Chart - using peer benchmark
+        if meta:
+            # Load all analysts' peer histories and calculate team average
+            all_histories = []
+            for _, row in peer_scorecard.iterrows():
+                history = load_peer_analyst_history(row['analyst_email'])
+                if not history.empty:
+                    history = history.set_index('date')['index_value']
+                    all_histories.append(history)
+            
+            if all_histories:
+                team_df = pd.DataFrame(all_histories).T
+                team_df['team_avg'] = team_df.mean(axis=1)
+                team_df = team_df.reset_index()
+                team_df = team_df.rename(columns={'index': 'date'})
+                
+                # Create chart showing team average peer-based index
+                fig = create_team_overview_chart(team_df, benchmark_label="Peer Benchmark = 1.0")
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Individual Analyst Chart using peer benchmark
+        selected_name = selected_view
+        
+        # Get analyst email
+        selected_email = None
+        for name, email in analyst_options:
+            if name == selected_name:
+                selected_email = email
+                break
+        
+        # Load peer-based history
+        alpha_history = load_peer_analyst_history(selected_email)
+        
+        # Alpha Index History Chart (peer-based)
+        if not alpha_history.empty and meta:
+            # Load active tickers and merge
+            ticker_list = load_analyst_ticker_list(selected_email)
+            if not ticker_list.empty:
+                alpha_history = alpha_history.merge(ticker_list, on='date', how='left')
+            
+            # Create chart with peer benchmark line at 1.0
+            from components.charts import create_peer_alpha_chart
+            fig = create_peer_alpha_chart(
+                alpha_history,
+                title=f"Alpha Index vs Coverage - {selected_name}"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Peer Scorecard Table
+    st.subheader("Analyst Scorecard (Peer Benchmark)")
+    
+    display_cols = ['rank', 'analyst_name', 'index_value', 'ytd_alpha', 'hit_rate', 
+                    'information_ratio', 'conviction', 'coverage']
+    display_df = peer_scorecard[display_cols].copy()
+    display_df.columns = ['Rank', 'Analyst', 'Peer Alpha Index', 'YTD Alpha %', 'Hit Rate %',
+                          'Info Ratio', 'Conviction %', 'Coverage']
+    
+    display_df['Peer Alpha Index'] = display_df['Peer Alpha Index'].apply(lambda x: f"{x:.2f}")
+    display_df['YTD Alpha %'] = display_df['YTD Alpha %'].apply(lambda x: f"{x:+.2f}")
+    display_df['Hit Rate %'] = display_df['Hit Rate %'].apply(lambda x: f"{x:.1f}")
+    display_df['Info Ratio'] = display_df['Info Ratio'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
+    display_df['Conviction %'] = display_df['Conviction %'].apply(lambda x: f"{x:.1f}")
+    
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
 def render_leaderboard(scorecard: pd.DataFrame):
     """Render Leaderboard page."""
     st.subheader("🏆 Analyst Leaderboard")
@@ -462,7 +678,7 @@ def render_leaderboard(scorecard: pd.DataFrame):
             st.info("Not enough data for Information Ratio")
 
 
-def render_calculation_detail(scorecard: pd.DataFrame):
+def render_calculation_detail(scorecard: pd.DataFrame, peer_scorecard: pd.DataFrame = None):
     """Render Calculation Detail page for verifying data."""
     st.subheader("📋 Calculation Detail - Data Verification")
     
@@ -471,7 +687,7 @@ def render_calculation_detail(scorecard: pd.DataFrame):
     - **Stock Return**: Lợi nhuận cổ phiếu (%)
     - **VnIndex Return**: Lợi nhuận VnIndex (%)
     - **Excess Return**: Stock Return - VnIndex Return
-    - **Direction Weight**: +1.0 (OPF), -1.0 (UPF), -0.3 (MPF)
+    - **Direction Weight**: +1.0 (OPF/BUY), -1.0 (UPF/SELL/AVOID), +0.3 (MPF)
     - **Contribution**: Direction × Excess Return
     - **Daily Alpha**: Trung bình của tất cả Contributions
     """)
@@ -493,8 +709,20 @@ def render_calculation_detail(scorecard: pd.DataFrame):
             selected_email = email
             break
     
-    # Get available dates
-    available_dates = get_available_dates(selected_email)
+    # Benchmark selector
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        benchmark_type = st.selectbox(
+            "Benchmark Type",
+            ["VnIndex Benchmark", "Peer Benchmark"],
+            key="benchmark_selector"
+        )
+    
+    # Get available dates based on benchmark type
+    if benchmark_type == "Peer Benchmark":
+        available_dates = get_peer_available_dates(selected_email)
+    else:
+        available_dates = get_available_dates(selected_email)
     
     if not available_dates:
         st.warning("No calculation data available. Please run `python precalculate.py` first.")
@@ -509,8 +737,15 @@ def render_calculation_detail(scorecard: pd.DataFrame):
             key="calc_detail_date"
         )
     
-    # Load contributions for selected date
-    contributions = load_daily_contributions(selected_email, selected_date)
+    # Load contributions for selected date based on benchmark type
+    if benchmark_type == "Peer Benchmark":
+        contributions = load_peer_daily_contributions(selected_email, selected_date)
+        benchmark_label = "Peer Return"
+        benchmark_col = "peer_return"
+    else:
+        contributions = load_daily_contributions(selected_email, selected_date)
+        benchmark_label = "VnIndex Return"
+        benchmark_col = "vnindex_return"
     
     if contributions.empty:
         st.info(f"No data for {selected_date}")
@@ -537,24 +772,25 @@ def render_calculation_detail(scorecard: pd.DataFrame):
     # Format and display detailed table
     display_df = contributions.copy()
     
-    # Rename columns for display
-    display_df = display_df.rename(columns={
+    # Rename columns for display - dynamic based on benchmark type
+    rename_dict = {
         'ticker': 'Ticker',
         'recommendation': 'Recommendation',
         'direction_weight': 'Direction',
         'stock_return': 'Stock Return %',
-        'vnindex_return': 'VnIndex Return %',
+        benchmark_col: f'{benchmark_label} %',
         'excess_return': 'Excess Return %',
         'contribution': 'Contribution %',
         'is_correct': 'Correct'
-    })
+    }
+    display_df = display_df.rename(columns=rename_dict)
     
     # Drop trade_date column (already shown above)
     display_df = display_df.drop(columns=['trade_date'])
     
     # Format numbers
     display_df['Stock Return %'] = display_df['Stock Return %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
-    display_df['VnIndex Return %'] = display_df['VnIndex Return %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
+    display_df[f'{benchmark_label} %'] = display_df[f'{benchmark_label} %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
     display_df['Excess Return %'] = display_df['Excess Return %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
     display_df['Contribution %'] = display_df['Contribution %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
     display_df['Direction'] = display_df['Direction'].apply(lambda x: f"{x:+.1f}")
@@ -564,9 +800,9 @@ def render_calculation_detail(scorecard: pd.DataFrame):
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     # Formula explanation
-    with st.expander("📐 Calculation Formula"):
+    with st.expander("📐 Calculation Formula - VnIndex Benchmark"):
         st.markdown("""
-        ### How Daily Alpha is calculated:
+        ### How Daily Alpha is calculated (Performance Overview):
         
         1. **Excess Return** = Stock Return - VnIndex Return
         2. **Contribution** = Direction Weight × Excess Return
@@ -589,6 +825,49 @@ def render_calculation_detail(scorecard: pd.DataFrame):
         ### Correct Call:
         - **OPF**: Correct if Excess Return > 0
         - **UPF/MPF**: Correct if Excess Return < 0
+        """)
+    
+    # Peer Comparison explanation
+    with st.expander("🔄 Calculation Formula - Peer Comparison"):
+        st.markdown("""
+        ### How Daily Alpha is calculated (Peer Comparison):
+        
+        Trang **Peer Comparison** sử dụng cách tính tương tự nhưng thay **VnIndex Return** bằng 
+        **Average Return của tất cả cổ phiếu trong list cover**.
+        
+        | Metric | Performance Overview | Peer Comparison |
+        |--------|---------------------|-----------------|
+        | **Benchmark** | VnIndex Return | Avg Return của list cover |
+        | **Excess Return** | Stock Return - VnIndex Return | Stock Return - Avg Peer Return |
+        
+        ### 📊 Cách tính Avg Peer Return:
+        
+        1. **Cho mỗi analyst**: Lấy tất cả cổ phiếu active của analyst ngày đó
+        2. Tính **equal-weighted average return** của tất cả cổ phiếu đó
+        3. **Excess Return** = Stock Return - Avg Peer Return
+        
+        ### 🎯 Ý nghĩa:
+        
+        - **Performance Overview (vs VnIndex)**: Đánh giá khả năng chọn stock outperform/underperform thị trường
+        - **Peer Comparison (vs Peers)**: Đánh giá khả năng **chọn stock tốt nhất** trong list cover của analyst
+        
+        ### Ví dụ:
+        
+        Nếu ngày X analyst có list cover:
+        - VNM: +2%
+        - HPG: +3%  
+        - FPT: +1%
+        - VHM: +4%
+        
+        **Avg Peer Return** = (2+3+1+4)/4 = **2.5%**
+        
+        | Stock | Return | Excess vs VnIndex (giả sử +1%) | Excess vs Peers (2.5%) |
+        |-------|--------|-------------------------------|------------------------|
+        | VNM | +2% | +2% - 1% = **+1%** | +2% - 2.5% = **-0.5%** |
+        | HPG | +3% | +3% - 1% = **+2%** | +3% - 2.5% = **+0.5%** |
+        | VHM | +4% | +4% - 1% = **+3%** | +4% - 2.5% = **+1.5%** |
+        
+        → Peer Comparison đánh giá **relative ranking** trong universe của analyst.
         """)
 
 
