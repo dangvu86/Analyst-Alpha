@@ -14,19 +14,61 @@ import pandas as pd
 import sqlite3
 import os
 import sys
+import plotly.graph_objects as go
+from datetime import datetime
+try:
+    import gdown
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
+    import gdown
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import COLORS, VNINDEX_TICKER
+from config import (
+    COLORS, 
+    DEFAULT_START_DATE, 
+    DEFAULT_END_DATE,
+    VNINDEX_TICKER,
+    SKIP_RATINGS
+)
 from components.charts import (
     create_alpha_vs_vnindex_chart, create_daily_alpha_bars,
-    create_ranking_bars, create_team_overview_chart
+    create_ranking_bars, create_team_overview_chart,
+    create_peer_alpha_chart
 )
 from data.database import get_vnindex_prices
+from data.calculations import (
+    calculate_analyst_summary,
+    calculate_analyst_alpha_index,
+    calculate_analyst_daily_alpha
+)
 
-# Pre-calculated database
+# Pre-calculated database path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ALPHA_INDEX_DB = os.path.join(BASE_DIR, 'alpha_index.db')
+DRIVE_FILE_ID = "1KQYKwD_DPYbECN8iUmiLnXuEYD_vqnFh"
+
+def sync_db_from_drive():
+    """Download fresh alpha_index.db from Google Drive on startup."""
+    # Use st.cache_resource to avoid redownloading on every rerun/interaction
+    # But we want it to run once per session start.
+    if 'db_synced' not in st.session_state:
+        st.toast("Syncing data from Cloud...", icon="☁️")
+        try:
+            url = f'https://drive.google.com/uc?id={DRIVE_FILE_ID}'
+            # Always overwrite
+            gdown.download(url, ALPHA_INDEX_DB, quiet=False)
+            st.session_state['db_synced'] = True
+            st.toast("Data synced successfully!", icon="✅")
+        except Exception as e:
+            st.error(f"Failed to sync database: {e}")
+            # Do not stop if file exists locally (fallback)
+            if not os.path.exists(ALPHA_INDEX_DB):
+                st.stop()
+
+# Sync DB on startup
+sync_db_from_drive()
 
 
 # Page configuration
@@ -108,22 +150,31 @@ def load_scorecard() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_analyst_history(analyst_email: str) -> pd.DataFrame:
-    """Load alpha history for a specific analyst."""
+    """Load alpha history for a specific analyst with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
     
     df = pd.read_sql_query("""
+        WITH TickerList AS (
+            SELECT trade_date, 
+                   GROUP_CONCAT(ticker || ' ' || recommendation, '<br>') as active_tickers
+            FROM DailyContributions
+            WHERE analyst_email = ?
+            GROUP BY trade_date
+        )
         SELECT 
-            trade_date as date,
-            daily_alpha,
-            index_value,
-            hits,
-            total,
-            cumulative_hits,
-            cumulative_total
-        FROM AnalystAlphaDaily
-        WHERE analyst_email = ?
-        ORDER BY trade_date
-    """, conn, params=(analyst_email,))
+            t1.trade_date as date,
+            t1.daily_alpha,
+            t1.index_value,
+            t1.hits,
+            t1.total,
+            t1.cumulative_hits,
+            t1.cumulative_total,
+            t2.active_tickers
+        FROM AnalystAlphaDaily t1
+        LEFT JOIN TickerList t2 ON t1.trade_date = t2.trade_date
+        WHERE t1.analyst_email = ?
+        ORDER BY t1.trade_date
+    """, conn, params=(analyst_email, analyst_email))
     
     conn.close()
     return df
@@ -266,6 +317,20 @@ def get_available_dates(analyst_email: str) -> list:
     return df['trade_date'].tolist()
 
 
+@st.cache_data(ttl=3600)
+def get_available_dates_peer(analyst_email: str) -> list:
+    """Get list of available trading dates for an analyst (peer contributions)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    df = pd.read_sql_query("""
+        SELECT DISTINCT trade_date 
+        FROM PeerDailyContributions 
+        WHERE analyst_email = ?
+        ORDER BY trade_date DESC
+    """, conn, params=(analyst_email,))
+    conn.close()
+    return df['trade_date'].tolist()
+
+
 # ===== PEER COMPARISON DATA LOADING FUNCTIONS =====
 
 @st.cache_data(ttl=3600)
@@ -307,22 +372,31 @@ def load_peer_scorecard() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_peer_analyst_history(analyst_email: str) -> pd.DataFrame:
-    """Load peer-based alpha history for a specific analyst."""
+    """Load peer-based alpha history for a specific analyst with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
     
     df = pd.read_sql_query("""
+        WITH TickerList AS (
+            SELECT trade_date, 
+                   GROUP_CONCAT(ticker || ' ' || recommendation, '<br>') as active_tickers
+            FROM PeerDailyContributions
+            WHERE analyst_email = ?
+            GROUP BY trade_date
+        )
         SELECT 
-            trade_date as date,
-            daily_alpha,
-            index_value,
-            hits,
-            total,
-            cumulative_hits,
-            cumulative_total
-        FROM PeerAnalystAlphaDaily
-        WHERE analyst_email = ?
-        ORDER BY trade_date
-    """, conn, params=(analyst_email,))
+            t1.trade_date as date,
+            t1.daily_alpha,
+            t1.index_value,
+            t1.hits,
+            t1.total,
+            t1.cumulative_hits,
+            t1.cumulative_total,
+            t2.active_tickers
+        FROM PeerAnalystAlphaDaily t1
+        LEFT JOIN TickerList t2 ON t1.trade_date = t2.trade_date
+        WHERE t1.analyst_email = ?
+        ORDER BY t1.trade_date
+    """, conn, params=(analyst_email, analyst_email))
     
     conn.close()
     return df
@@ -416,13 +490,24 @@ def load_industry_scorecard() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_industry_history(industry: str) -> pd.DataFrame:
-    """Load alpha history for a specific industry (vs VnIndex)."""
+    """Load alpha history for a specific industry (vs VnIndex) with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
     df = pd.read_sql_query("""
-        SELECT trade_date as date, daily_alpha, index_value, hits, total,
-               cumulative_hits, cumulative_total
-        FROM IndustryAlphaDaily WHERE industry = ? ORDER BY trade_date
-    """, conn, params=(industry,))
+        WITH TickerList AS (
+            SELECT trade_date, 
+                   GROUP_CONCAT(ticker || ' ' || recommendation, '<br>') as active_tickers
+            FROM IndustryDailyContributions
+            WHERE industry = ?
+            GROUP BY trade_date
+        )
+        SELECT t1.trade_date as date, t1.daily_alpha, t1.index_value, t1.hits, t1.total,
+               t1.cumulative_hits, t1.cumulative_total,
+               t2.active_tickers
+        FROM IndustryAlphaDaily t1
+        LEFT JOIN TickerList t2 ON t1.trade_date = t2.trade_date
+        WHERE t1.industry = ? 
+        ORDER BY t1.trade_date
+    """, conn, params=(industry, industry))
     conn.close()
     return df
 
@@ -479,13 +564,24 @@ def load_industry_peer_scorecard() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_industry_peer_history(industry: str) -> pd.DataFrame:
-    """Load alpha history for an industry (vs Sector Average)."""
+    """Load alpha history for an industry (vs Sector Average) with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
     df = pd.read_sql_query("""
-        SELECT trade_date as date, daily_alpha, index_value, hits, total,
-               cumulative_hits, cumulative_total
-        FROM IndustryPeerAlphaDaily WHERE industry = ? ORDER BY trade_date
-    """, conn, params=(industry,))
+        WITH TickerList AS (
+            SELECT trade_date, 
+                   GROUP_CONCAT(ticker || ' ' || recommendation, '<br>') as active_tickers
+            FROM IndustryPeerDailyContributions
+            WHERE industry = ?
+            GROUP BY trade_date
+        )
+        SELECT t1.trade_date as date, t1.daily_alpha, t1.index_value, t1.hits, t1.total,
+               t1.cumulative_hits, t1.cumulative_total,
+               t2.active_tickers
+        FROM IndustryPeerAlphaDaily t1
+        LEFT JOIN TickerList t2 ON t1.trade_date = t2.trade_date
+        WHERE t1.industry = ? 
+        ORDER BY t1.trade_date
+    """, conn, params=(industry, industry))
     conn.close()
     return df
 
@@ -564,19 +660,218 @@ def main():
     st.sidebar.title("⚙️ Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["📊 Performance Overview", "🔄 Peer Comparison", "🏭 Industry Alpha", "📋 Calculation Detail", "🏆 Leaderboard"]
+        ["📊 Analyst Alpha", "🏭 Industry Alpha", "📋 Calculation Detail", "🏆 Leaderboard"]
     )
     
-    if page == "📊 Performance Overview":
-        render_performance_overview(scorecard, meta)
-    elif page == "🔄 Peer Comparison":
-        render_peer_comparison(peer_scorecard, meta)
+    if page == "📊 Analyst Alpha":
+        render_analyst_alpha(scorecard, peer_scorecard, meta)
     elif page == "🏭 Industry Alpha":
         render_industry_alpha(meta)
     elif page == "📋 Calculation Detail":
         render_calculation_detail(scorecard, peer_scorecard)
     elif page == "🏆 Leaderboard":
         render_leaderboard(scorecard)
+
+
+def render_analyst_alpha(scorecard: pd.DataFrame, peer_scorecard: pd.DataFrame, meta: dict):
+    """Render merged Analyst Alpha page with tabs."""
+    st.subheader("📊 Analyst Alpha")
+    
+    tab1, tab2 = st.tabs(["📊 vs VnIndex", "🔄 vs Coverage"])
+    
+    with tab1:
+        st.markdown("### Performance vs VnIndex")
+        render_analyst_alpha_tab(scorecard, meta, use_peer=False)
+        
+    with tab2:
+        st.markdown("### Performance vs Sector Average")
+        render_analyst_alpha_tab(peer_scorecard, meta, use_peer=True)
+
+
+def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool = False):
+    """Render content for a specific Analyst Alpha tab."""
+    if scorecard.empty:
+        st.warning("No data available.")
+        return
+        
+    # View selector: Team Average or Individual Analyst
+    analyst_options = scorecard[['analyst_name', 'analyst_email']].values.tolist()
+    view_options = ['Team Average'] + [a[0] for a in analyst_options]
+    
+    # Store selection in session state to persist across tabs if desired? No, independent is fine.
+    # Actually user might want to see same analyst across tabs.
+    # Let's try to use a shared key suffix but distinct enough.
+    
+    selected_view = st.selectbox(
+        "Select View",
+        view_options,
+        index=0,
+        key=f"analyst_selector_{'peer' if use_peer else 'vnindex'}"
+    )
+    
+    st.markdown("---")
+    
+    # Display chart based on selection
+    if selected_view == 'Team Average':
+        # Team Average Chart
+        if meta:
+            # Load all analysts' histories and calculate team average
+            all_histories = []
+            for _, row in scorecard.iterrows():
+                if use_peer:
+                    history = load_peer_analyst_history(row['analyst_email'])
+                else:
+                    history = load_analyst_history(row['analyst_email'])
+                    
+                if not history.empty:
+                    history = history.set_index('date')['index_value']
+                    all_histories.append(history)
+            
+            if all_histories:
+                team_df = pd.DataFrame(all_histories).T
+                team_df['team_avg'] = team_df.mean(axis=1)
+                team_df = team_df.reset_index()
+                team_df = team_df.rename(columns={'index': 'date'})
+                
+                # Load VnIndex for comparison (only for vs VnIndex tab)
+                if not use_peer:
+                    vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
+                    if not vnindex.empty:
+                        team_df = team_df.merge(
+                            vnindex.rename(columns={'index_value': 'vnindex_normalized'}),
+                            on='date', how='left'
+                        )
+                
+                fig = create_team_overview_chart(team_df, benchmark_label="Sector Avg = 0%" if use_peer else None)
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Individual Analyst Chart
+        selected_name = selected_view
+        selected_email = next((email for name, email in analyst_options if name == selected_name), None)
+        
+        if selected_email:
+            if use_peer:
+                history = load_peer_analyst_history(selected_email)
+                if not history.empty:
+                    fig = create_peer_alpha_chart(history, title=f"Peer Alpha - {selected_name}")
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                history = load_analyst_history(selected_email)
+                if not history.empty:
+                    vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
+                    if not vnindex.empty:
+                        fig = create_alpha_vs_vnindex_chart(history, vnindex, title=f"Alpha - {selected_name}")
+                    else:
+                        fig = create_alpha_vs_vnindex_chart(history, pd.DataFrame(), title=f"Alpha - {selected_name}")
+                    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    
+    # Summary / Ranking Table (Requested Feature)
+    st.subheader(f"📊 Ranking Overview ({'vs Sector Avg' if use_peer else 'vs VnIndex'})")
+    
+    # Show global ranking table here
+    display_df = scorecard.copy()
+    
+    # Use different columns based on tab? Scorecard has standard columns.
+    # Just format and show.
+    
+    if use_peer:
+         display_cols = ['rank', 'analyst_name', 'index_value', 'ytd_alpha', 'hit_rate', 
+                        'information_ratio', 'conviction', 'coverage']
+    else:
+         display_cols = ['rank', 'analyst_name', 'index_value', 'ytd_alpha', 'hit_rate', 
+                        'information_ratio', 'conviction', 'coverage']
+    
+    # Filter columns that exist
+    display_cols = [c for c in display_cols if c in display_df.columns]
+    
+    summary_table = display_df[display_cols].copy()
+    
+    # Explicit renaming for better clarity
+    rename_map = {
+        'rank': 'Rank',
+        'analyst_name': 'Analyst Name',
+        'index_value': 'Alpha Index',
+        'ytd_alpha': 'Total Alpha',
+        'hit_rate': 'Hit Rate',
+        'information_ratio': 'Information Ratio',
+        'conviction': 'Conviction',
+        'coverage': 'Coverage'
+    }
+    summary_table = summary_table.rename(columns=rename_map)
+    # Fallback for others
+    summary_table.columns = [c.replace('_', ' ').title() if c not in rename_map.values() else c for c in summary_table.columns]
+    
+    # Format
+    if 'Alpha Index' in summary_table.columns:
+        summary_table['Alpha Index'] = summary_table['Alpha Index'].apply(lambda x: f"{x:.2f}")
+    if 'Total Alpha' in summary_table.columns:
+        summary_table['Total Alpha'] = summary_table['Total Alpha'].apply(lambda x: f"{x:+.2f}%")
+    if 'Hit Rate' in summary_table.columns:
+        summary_table['Hit Rate'] = summary_table['Hit Rate'].apply(lambda x: f"{x:.1f}%")
+        
+    st.dataframe(summary_table, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # Detail Table (Only if specific analyst selected)
+    if selected_view != 'Team Average' and selected_email:
+        st.subheader(f"📋 Daily Details - {selected_name}")
+        
+        # Date selector
+        if use_peer:
+            available_dates = get_available_dates_peer(selected_email)
+        else:
+            available_dates = get_available_dates(selected_email)
+            
+        if not available_dates:
+            st.info("No detail data available.")
+            return
+            
+        selected_date = st.selectbox(
+            "Select Date", 
+            available_dates,
+            key=f"date_selector_{'peer' if use_peer else 'vnindex'}_{selected_email}"
+        )
+        
+        # Load daily contributions
+        if use_peer:
+            contributions = load_peer_daily_contributions(selected_email, selected_date)
+            benchmark_col = "peer_return"
+            benchmark_label = "Sector Avg"
+        else:
+            contributions = load_daily_contributions(selected_email, selected_date)
+            benchmark_col = "vnindex_return"
+            benchmark_label = "VnIndex"
+            
+        if not contributions.empty:
+            # Render contributions table
+            display_df = contributions.copy()
+            rename_dict = {
+                'ticker': 'Ticker',
+                'recommendation': 'Rating',
+                'direction_weight': 'Direction',
+                'stock_return': 'Stock %',
+                benchmark_col: f'{benchmark_label} %',
+                'excess_return': 'Excess %',
+                'contribution': 'Contrib %',
+                'is_correct': '✓'
+            }
+            display_df = display_df.rename(columns=rename_dict)
+            
+            # Format
+            display_df['Stock %'] = display_df['Stock %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "")
+            display_df[f'{benchmark_label} %'] = display_df[f'{benchmark_label} %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "")
+            display_df['Excess %'] = display_df['Excess %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "")
+            display_df['Contrib %'] = display_df['Contrib %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "")
+            display_df['Direction'] = display_df['Direction'].apply(lambda x: f"{x:+.1f}")
+            display_df['✓'] = display_df['✓'].apply(lambda x: "✅" if x == 1 else "❌")
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+        else:
+            st.info(f"No transactions for {selected_date}")
 
 
 def render_performance_overview(scorecard: pd.DataFrame, meta: dict):
@@ -845,9 +1140,6 @@ def render_industry_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: boo
     
     st.markdown("---")
     
-    # Stock Detail Table
-    st.subheader(f"📋 Stock Details - {selected_industry}")
-    
     # Date selector
     available_dates = get_industry_available_dates(selected_industry, use_peer)
     if not available_dates:
@@ -859,6 +1151,81 @@ def render_industry_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: boo
         available_dates,
         key=f"industry_date_{'peer' if use_peer else 'vnindex'}"
     )
+
+    st.markdown("---")
+    
+    # Global Industry Ranking Table (Dynamic for Selected Date)
+    st.subheader(f"📊 Industry Ranking Overview ({pd.to_datetime(selected_date).strftime('%Y-%m-%d')})")
+    
+    # We need to calculate this dynamically for the selected date
+    # 1. Get all industries
+    # 2. For each industry, get its Alpha Index on that date
+    # 3. Count active stocks on that date
+    
+    ranking_data = []
+    
+    # Use cached data if possible, but simplest is to iterate
+    # Note: efficient way is to load IndustryAlphaDaily for all industries on this date
+    # But we don't have a single function for that yet. 
+    # Let's iterate over 'industries' list from scorecard (which has all industries)
+    
+    for ind in industries:
+        # Load alpha history for this industry to get index value on date
+        # Optimziation: Create a bulk loader function later if slow.
+        if use_peer:
+             # This might be slow if we load history 18 times on every refresh.
+             # Better approach: Add a new SQL query in database.py or use IndustryDailyContributions
+             pass
+    
+    # ALTERNATIVE FAST APPROACH: 
+    # Use `get_industry_ranking_on_date(date)` function which we should create.
+    # Since we can't easily create new SQL function without modifying precalculate/database deeply?
+    # Actually we can add query here or in app.py helper.
+    
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    if use_peer:
+        # Optimziation: Total count is already saved in IndustryPeerAlphaDaily
+        query_ranking = """
+            SELECT industry, index_value, total as stock_count
+            FROM IndustryPeerAlphaDaily
+            WHERE trade_date = ?
+        """
+    else:
+        query_ranking = """
+            SELECT industry, index_value, total as stock_count
+            FROM IndustryAlphaDaily
+            WHERE trade_date = ?
+        """
+    
+    df_summary = pd.read_sql_query(query_ranking, conn, params=(selected_date,))
+    conn.close()
+    
+    # Process
+    if not df_summary.empty:
+        # Rename
+        df_summary = df_summary.rename(columns={
+            'industry': 'Industry',
+            'index_value': 'Alpha Index',
+            'stock_count': 'Stocks'
+        })
+        
+        # Sort
+        df_summary = df_summary.sort_values(by='Alpha Index', ascending=False)
+        
+        # Format
+        df_summary['Alpha Index'] = df_summary['Alpha Index'].apply(lambda x: f"{x:.2f}")
+        df_summary['Stocks'] = df_summary['Stocks'].astype(int)
+        
+        # Display
+        st.dataframe(df_summary, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No summary data for {selected_date}")
+
+    
+    st.markdown("---")
+    
+    # Stock Detail Table
+    st.subheader(f"📋 Stock Details - {selected_industry}")
     
     # Load contributions
     if use_peer:

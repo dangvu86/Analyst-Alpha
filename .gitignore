@@ -1,7 +1,8 @@
 # Databases (source data - do not upload)
 adjusted_prices.db
 recommendation_history.db
-# alpha_index.db is intentionally tracked (pre-calculated output)
+# alpha_index.db is manually downloaded from Drive
+alpha_index.db
 
 # Python cache
 __pycache__/
