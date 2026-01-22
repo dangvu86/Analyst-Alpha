@@ -106,7 +106,7 @@ def check_database_exists():
     return os.path.exists(ALPHA_INDEX_DB)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_scorecard() -> pd.DataFrame:
     """Load analyst scorecard from pre-calculated database."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -143,7 +143,7 @@ def load_scorecard() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_analyst_history(analyst_email: str) -> pd.DataFrame:
     """Load alpha history for a specific analyst with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -175,7 +175,7 @@ def load_analyst_history(analyst_email: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_analyst_ticker_list(analyst_email: str) -> pd.DataFrame:
     """Load list of active tickers and their contributions per date."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -212,7 +212,7 @@ def load_analyst_ticker_list(analyst_email: str) -> pd.DataFrame:
     return grouped
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_meta_info() -> dict:
     """Load calculation metadata."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -229,7 +229,7 @@ def load_meta_info() -> dict:
     return df.iloc[0].to_dict()
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_vnindex_normalized(start_date: str, end_date: str) -> pd.DataFrame:
     """Load VnIndex normalized to 100."""
     # from data.database import get_stock_prices
@@ -255,7 +255,7 @@ def load_vnindex_normalized(start_date: str, end_date: str) -> pd.DataFrame:
     return prices[['date', 'index_value']]
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_daily_contributions(analyst_email: str, trade_date: str = None) -> pd.DataFrame:
     """Load stock-level contributions for an analyst on a specific date."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -298,7 +298,7 @@ def load_daily_contributions(analyst_email: str, trade_date: str = None) -> pd.D
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def get_available_dates(analyst_email: str) -> list:
     """Get list of available trading dates for an analyst."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -312,7 +312,7 @@ def get_available_dates(analyst_email: str) -> list:
     return df['trade_date'].tolist()
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def get_available_dates_peer(analyst_email: str) -> list:
     """Get list of available trading dates for an analyst (peer contributions)."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -328,7 +328,7 @@ def get_available_dates_peer(analyst_email: str) -> list:
 
 # ===== PEER COMPARISON DATA LOADING FUNCTIONS =====
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_peer_scorecard() -> pd.DataFrame:
     """Load analyst scorecard from peer-based calculation."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -365,7 +365,7 @@ def load_peer_scorecard() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_peer_analyst_history(analyst_email: str) -> pd.DataFrame:
     """Load peer-based alpha history for a specific analyst with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -397,7 +397,7 @@ def load_peer_analyst_history(analyst_email: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_peer_daily_contributions(analyst_email: str, trade_date: str = None) -> pd.DataFrame:
     """Load peer-based stock-level contributions for an analyst."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -439,7 +439,7 @@ def load_peer_daily_contributions(analyst_email: str, trade_date: str = None) ->
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def get_peer_available_dates(analyst_email: str) -> list:
     """Get list of available trading dates for peer comparison."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -455,7 +455,7 @@ def get_peer_available_dates(analyst_email: str) -> list:
 
 # ===== INDUSTRY ALPHA DATA LOADING FUNCTIONS =====
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_scorecard() -> pd.DataFrame:
     """Load industry scorecard from pre-calculated database (vs VnIndex)."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -483,7 +483,7 @@ def load_industry_scorecard() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_history(industry: str) -> pd.DataFrame:
     """Load alpha history for a specific industry (vs VnIndex) with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -507,7 +507,7 @@ def load_industry_history(industry: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_daily_contributions(industry: str, trade_date: str = None) -> pd.DataFrame:
     """Load stock-level contributions for an industry."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -529,7 +529,7 @@ def load_industry_daily_contributions(industry: str, trade_date: str = None) -> 
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_peer_scorecard() -> pd.DataFrame:
     """Load industry scorecard (vs Sector Average)."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -557,7 +557,7 @@ def load_industry_peer_scorecard() -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_peer_history(industry: str) -> pd.DataFrame:
     """Load alpha history for an industry (vs Sector Average) with active tickers."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -581,7 +581,7 @@ def load_industry_peer_history(industry: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def load_industry_peer_contributions(industry: str, trade_date: str = None) -> pd.DataFrame:
     """Load stock-level contributions for an industry (vs Sector Average)."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -603,7 +603,7 @@ def load_industry_peer_contributions(industry: str, trade_date: str = None) -> p
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3000)
 def get_industry_available_dates(industry: str, use_peer: bool = False) -> list:
     """Get list of available trading dates for an industry."""
     conn = sqlite3.connect(ALPHA_INDEX_DB)
@@ -683,19 +683,231 @@ def render_analyst_alpha(scorecard: pd.DataFrame, peer_scorecard: pd.DataFrame, 
         render_analyst_alpha_tab(peer_scorecard, meta, use_peer=True)
 
 
+@st.cache_data(ttl=3000)
+def load_daily_scorecard(trade_date: str) -> pd.DataFrame:
+    """Load scorecard (rankings) for a specific date (vs VnIndex) with calculated metrics."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    # 1. Base Scorecard Data
+    df = pd.read_sql_query("""
+        SELECT analyst_email, index_value, cumulative_hits, cumulative_total
+        FROM AnalystAlphaDaily 
+        WHERE trade_date = ?
+    """, conn, params=(trade_date,))
+    
+    if df.empty:
+        conn.close()
+        return pd.DataFrame()
+        
+    # 2. Coverage & Conviction (from DailyContributions on that date)
+    contrib_df = pd.read_sql_query("""
+        SELECT analyst_email, direction_weight
+        FROM DailyContributions
+        WHERE trade_date = ?
+    """, conn, params=(trade_date,))
+    
+    # Calculate coverage and conviction per analyst
+    metrics = []
+    for email, group in contrib_df.groupby('analyst_email'):
+        total = len(group)
+        # Assuming: >0 is OPT (Buy), -1 is UPF (Sell), -0.3 is MPF (Hold)
+        # Conviction = (OPT + UPF) / Total
+        opf = len(group[group['direction_weight'] > 0])
+        upf = len(group[group['direction_weight'] == -1.0])
+        
+        conviction = ((opf + upf) / total * 100) if total > 0 else 0
+        metrics.append({
+            'analyst_email': email,
+            'coverage': total,
+            'conviction': conviction
+        })
+    
+    metrics_df = pd.DataFrame(metrics)
+    
+    # 3. Information Ratio (History up to date)
+    # We need at least 20 days. Fetch all history <= date
+    history_df = pd.read_sql_query("""
+        SELECT analyst_email, daily_alpha
+        FROM AnalystAlphaDaily
+        WHERE trade_date <= ?
+    """, conn, params=(trade_date,))
+    
+    ir_metrics = []
+    for email, group in history_df.groupby('analyst_email'):
+        if len(group) >= 20:
+            avg = group['daily_alpha'].mean()
+            std = group['daily_alpha'].std()
+            ir = avg / std if std > 0 else 0
+        else:
+            ir = None
+        
+        ir_metrics.append({
+            'analyst_email': email,
+            'information_ratio': ir
+        })
+        
+    ir_df = pd.DataFrame(ir_metrics)
+    conn.close()
+    
+    # Merge all
+    if not metrics_df.empty:
+        df = df.merge(metrics_df, on='analyst_email', how='left')
+    
+    if not ir_df.empty:
+        df = df.merge(ir_df, on='analyst_email', how='left')
+        
+    # Calculate derived metrics
+    df['total_alpha'] = (df['index_value'] - 1) * 100
+    df['hit_rate'] = (df['cumulative_hits'] / df['cumulative_total'] * 100).fillna(0)
+    
+    # Sort
+    df = df.sort_values('index_value', ascending=False)
+    df['rank'] = range(1, len(df) + 1)
+    
+    return df
+
+@st.cache_data(ttl=3000)
+def load_peer_daily_scorecard(trade_date: str) -> pd.DataFrame:
+    """Load scorecard (rankings) for a specific date (vs Peer) with metrics."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    # 1. Base Scorecard
+    df = pd.read_sql_query("""
+        SELECT analyst_email, index_value, cumulative_hits, cumulative_total
+        FROM PeerAnalystAlphaDaily 
+        WHERE trade_date = ?
+    """, conn, params=(trade_date,))
+    
+    if df.empty:
+        conn.close()
+        return pd.DataFrame()
+
+    # 2. Coverage & Conviction
+    contrib_df = pd.read_sql_query("""
+        SELECT analyst_email, direction_weight
+        FROM PeerDailyContributions
+        WHERE trade_date = ?
+    """, conn, params=(trade_date,))
+    
+    metrics = []
+    for email, group in contrib_df.groupby('analyst_email'):
+        total = len(group)
+        opf = len(group[group['direction_weight'] > 0])
+        upf = len(group[group['direction_weight'] == -1.0])
+        
+        conviction = ((opf + upf) / total * 100) if total > 0 else 0
+        metrics.append({
+            'analyst_email': email,
+            'coverage': total,
+            'conviction': conviction
+        })
+    
+    metrics_df = pd.DataFrame(metrics)
+    
+    # 3. Information Ratio
+    history_df = pd.read_sql_query("""
+        SELECT analyst_email, daily_alpha
+        FROM PeerAnalystAlphaDaily
+        WHERE trade_date <= ?
+    """, conn, params=(trade_date,))
+    
+    ir_metrics = []
+    for email, group in history_df.groupby('analyst_email'):
+        if len(group) >= 20:
+            avg = group['daily_alpha'].mean()
+            std = group['daily_alpha'].std()
+            ir = avg / std if std > 0 else 0
+        else:
+            ir = None
+            
+        ir_metrics.append({
+            'analyst_email': email,
+            'information_ratio': ir
+        })
+        
+    ir_df = pd.DataFrame(ir_metrics)
+    conn.close()
+    
+    # Merge
+    if not metrics_df.empty:
+        df = df.merge(metrics_df, on='analyst_email', how='left')
+        
+    if not ir_df.empty:
+        df = df.merge(ir_df, on='analyst_email', how='left')
+        
+    # Derived
+    df['total_alpha'] = (df['index_value'] - 1) * 100
+    df['hit_rate'] = (df['cumulative_hits'] / df['cumulative_total'] * 100).fillna(0)
+    
+    df = df.sort_values('index_value', ascending=False)
+    df['rank'] = range(1, len(df) + 1)
+    
+    return df
+
+
 def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool = False):
     """Render content for a specific Analyst Alpha tab."""
     if scorecard.empty:
         st.warning("No data available.")
         return
         
+    # --- GLOBAL DATE SELECTOR FOR TAB ---
+    # Determine available dates based on data source
+    # We use a representative analyst (first one) or specific function to get all dates?
+    # Actually, we can just use the dates from the scorecard's latest update or query one analyst.
+    # Let's use get_trading_dates from database if possible, or just use meta['end_date'] as default.
+    # A safe bet: Get dates for the first analyst found. Most analysts share same trading days.
+    
+    first_email = scorecard.iloc[0]['analyst_email']
+    if use_peer:
+        available_dates = get_available_dates_peer(first_email)
+    else:
+        available_dates = get_available_dates(first_email)
+        
+    if not available_dates:
+        st.warning("No dates available.")
+        return
+
+    # Date Dropdown at the top
+    selected_date = st.selectbox(
+        "📅 Select Date (for Rankings & Details)", 
+        available_dates,
+        index=0,
+        key=f"global_date_selector_{'peer' if use_peer else 'vnindex'}"
+    )
+    
+    # --- LOAD DYNAMIC SCORECARD BASED ON DATE ---
+    # Map Names from original scorecard
+    name_map = dict(zip(scorecard['analyst_email'], scorecard['analyst_name']))
+    coverage_map = dict(zip(scorecard['analyst_email'], scorecard['coverage'])) if 'coverage' in scorecard.columns else {}
+    conviction_map = dict(zip(scorecard['analyst_email'], scorecard['conviction'])) if 'conviction' in scorecard.columns else {}
+    ir_map = dict(zip(scorecard['analyst_email'], scorecard['information_ratio'])) if 'information_ratio' in scorecard.columns else {}
+    
+    # If selected date is NOT latest, load historical
+    is_latest = (selected_date == available_dates[0])
+    
+    if is_latest:
+        current_scorecard = scorecard.copy()
+    else:
+        if use_peer:
+            current_scorecard = load_peer_daily_scorecard(selected_date)
+        else:
+            current_scorecard = load_daily_scorecard(selected_date)
+            
+        # Map names back
+        current_scorecard['analyst_name'] = current_scorecard['analyst_email'].map(name_map)
+        # For historical, we don't have historical coverage/IR easily available, 
+        # so we can either show current or N/A. Let's show N/A to avoid confusion or keep current if it's static?
+        # Let's keep fields empty or N/A except computed ones.
+        current_scorecard['information_ratio'] = None 
+        current_scorecard['conviction'] = None
+        current_scorecard['coverage'] = None
+    
+    st.markdown("---")
+        
     # View selector: Team Average or Individual Analyst
     analyst_options = scorecard[['analyst_name', 'analyst_email']].values.tolist()
     view_options = ['Team Average'] + [a[0] for a in analyst_options]
-    
-    # Store selection in session state to persist across tabs if desired? No, independent is fine.
-    # Actually user might want to see same analyst across tabs.
-    # Let's try to use a shared key suffix but distinct enough.
     
     selected_view = st.selectbox(
         "Select View",
@@ -708,7 +920,8 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     
     # Display chart based on selection
     if selected_view == 'Team Average':
-        # Team Average Chart
+        # Team Average Chart (Always shows full history, independent of selected date usually, 
+        # BUT user might expect it to cut off? Usually Chart shows TREND, so full history is better.)
         if meta:
             # Load all analysts' histories and calculate team average
             all_histories = []
@@ -738,6 +951,7 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
                         )
                 
                 fig = create_team_overview_chart(team_df, benchmark_label="Sector Avg = 0%" if use_peer else None)
+                # Add vertical line for selected date? Optional.
                 st.plotly_chart(fig, use_container_width=True)
     else:
         # Individual Analyst Chart
@@ -764,19 +978,14 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     
     # Summary / Ranking Table (Requested Feature)
     st.subheader(f"📊 Ranking Overview ({'vs Sector Avg' if use_peer else 'vs VnIndex'})")
+    if not is_latest:
+        st.caption(f"📅 Showing data as of: **{selected_date}**")
     
-    # Show global ranking table here
-    display_df = scorecard.copy()
+    # Format and Display dynamic scorecard
+    display_df = current_scorecard.copy()
     
-    # Use different columns based on tab? Scorecard has standard columns.
-    # Just format and show.
-    
-    if use_peer:
-         display_cols = ['rank', 'analyst_name', 'index_value', 'ytd_alpha', 'hit_rate', 
-                        'information_ratio', 'conviction', 'coverage']
-    else:
-         display_cols = ['rank', 'analyst_name', 'index_value', 'ytd_alpha', 'hit_rate', 
-                        'information_ratio', 'conviction', 'coverage']
+    display_cols = ['rank', 'analyst_name', 'index_value', 'total_alpha', 'hit_rate', 
+                    'information_ratio', 'conviction', 'coverage']
     
     # Filter columns that exist
     display_cols = [c for c in display_cols if c in display_df.columns]
@@ -788,7 +997,8 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
         'rank': 'Rank',
         'analyst_name': 'Analyst Name',
         'index_value': 'Alpha Index',
-        'ytd_alpha': 'Total Alpha',
+        'total_alpha': 'Total Alpha',
+        'ytd_alpha': 'Total Alpha', # Handle legacy name if present
         'hit_rate': 'Hit Rate',
         'information_ratio': 'Information Ratio',
         'conviction': 'Conviction',
@@ -798,13 +1008,20 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     # Fallback for others
     summary_table.columns = [c.replace('_', ' ').title() if c not in rename_map.values() else c for c in summary_table.columns]
     
+    # Check nulls for hist data
+    summary_table = summary_table.fillna("N/A")
+
     # Format
     if 'Alpha Index' in summary_table.columns:
-        summary_table['Alpha Index'] = summary_table['Alpha Index'].apply(lambda x: f"{x:.2f}")
+        summary_table['Alpha Index'] = summary_table['Alpha Index'].apply(lambda x: f"{float(x):.2f}" if x != "N/A" and pd.notna(x) else "N/A")
     if 'Total Alpha' in summary_table.columns:
-        summary_table['Total Alpha'] = summary_table['Total Alpha'].apply(lambda x: f"{x:+.2f}%")
+        summary_table['Total Alpha'] = summary_table['Total Alpha'].apply(lambda x: f"{float(x):+.2f}%" if x != "N/A" and pd.notna(x) else "N/A")
     if 'Hit Rate' in summary_table.columns:
-        summary_table['Hit Rate'] = summary_table['Hit Rate'].apply(lambda x: f"{x:.1f}%")
+        summary_table['Hit Rate'] = summary_table['Hit Rate'].apply(lambda x: f"{float(x):.1f}%" if x != "N/A" and pd.notna(x) else "N/A")
+    if 'Information Ratio' in summary_table.columns:
+        summary_table['Information Ratio'] = summary_table['Information Ratio'].apply(lambda x: f"{float(x):.4f}" if x != "N/A" and pd.notna(x) else "N/A")
+    if 'Conviction' in summary_table.columns:
+        summary_table['Conviction'] = summary_table['Conviction'].apply(lambda x: f"{float(x):.1f}%" if x != "N/A" and pd.notna(x) else "N/A")
         
     st.dataframe(summary_table, use_container_width=True, hide_index=True)
 
@@ -814,23 +1031,7 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     if selected_view != 'Team Average' and selected_email:
         st.subheader(f"📋 Daily Details - {selected_name}")
         
-        # Date selector
-        if use_peer:
-            available_dates = get_available_dates_peer(selected_email)
-        else:
-            available_dates = get_available_dates(selected_email)
-            
-        if not available_dates:
-            st.info("No detail data available.")
-            return
-            
-        selected_date = st.selectbox(
-            "Select Date", 
-            available_dates,
-            key=f"date_selector_{'peer' if use_peer else 'vnindex'}_{selected_email}"
-        )
-        
-        # Load daily contributions
+        # Load daily contributions for SELECTED DATE
         if use_peer:
             contributions = load_peer_daily_contributions(selected_email, selected_date)
             benchmark_col = "peer_return"
