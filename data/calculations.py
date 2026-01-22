@@ -460,3 +460,348 @@ def calculate_analyst_summary(
         'information_ratio': information_ratio,
         'daily_alphas': daily_alphas
     }
+
+
+# ===== INDUSTRY ALPHA FUNCTIONS =====
+
+def get_active_ratings_by_industry(recommendations_df: pd.DataFrame, as_of_date, industry: str = None) -> pd.DataFrame:
+    """
+    Get active ratings as of a specific date, optionally filtered by industry.
+    Active rating = the most recent recommendation for each ticker before or on that date.
+    """
+    df = recommendations_df.copy()
+    
+    # Filter to only recommendations on or before the date
+    df = df[df['Date'] <= as_of_date]
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Get the most recent recommendation for each ticker (from ANY analyst)
+    df_sorted = df.sort_values('Date', ascending=False)
+    active_ratings = df_sorted.groupby('Ticker').first().reset_index()
+    
+    # Filter by industry if specified
+    if industry:
+        active_ratings = active_ratings[active_ratings['Industry'] == industry]
+    
+    if active_ratings.empty:
+        return pd.DataFrame()
+    
+    # Filter out skipped ratings
+    active_ratings['Direction'] = active_ratings['Recommendation'].apply(get_direction_weight)
+    active_ratings = active_ratings[active_ratings['Direction'].notna()]
+    
+    return active_ratings
+
+
+def calculate_industry_daily_alpha(
+    industry: str,
+    trade_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    vnindex_returns: pd.Series
+) -> dict:
+    """
+    Calculate daily alpha for an industry on a specific date (vs VnIndex benchmark).
+    """
+    # Get active ratings for this industry on this date
+    active_ratings = get_active_ratings_by_industry(recommendations_df, trade_date, industry)
+    
+    if active_ratings.empty:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': []}
+    
+    # Get VnIndex return for this date
+    if trade_date not in vnindex_returns.index:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': []}
+    
+    vnindex_return = vnindex_returns.loc[trade_date]
+    
+    # Calculate contribution for each rated stock
+    contributions = []
+    hits = 0
+    
+    for _, rating in active_ratings.iterrows():
+        ticker = rating['Ticker']
+        direction = rating['Direction']
+        recommendation = rating['Recommendation']
+        
+        # Get stock return for this date
+        if ticker not in prices_df.columns or trade_date not in prices_df.index:
+            continue
+        
+        stock_return = prices_df.loc[trade_date, ticker]
+        
+        if pd.isna(stock_return) or pd.isna(vnindex_return):
+            continue
+        
+        # Calculate excess return and contribution
+        excess_return = stock_return - vnindex_return
+        contribution = direction * excess_return
+        
+        # Check if call was correct
+        is_correct = False
+        if direction > 0 and excess_return > 0:
+            is_correct = True
+        elif direction < 0 and excess_return < 0:
+            is_correct = True
+        
+        if is_correct:
+            hits += 1
+        
+        contributions.append({
+            'ticker': ticker,
+            'recommendation': recommendation,
+            'direction': direction,
+            'stock_return': stock_return,
+            'vnindex_return': vnindex_return,
+            'excess_return': excess_return,
+            'contribution': contribution,
+            'is_correct': is_correct
+        })
+    
+    # Calculate daily alpha as average contribution
+    if contributions:
+        daily_alpha = np.mean([c['contribution'] for c in contributions])
+        total = len(contributions)
+    else:
+        daily_alpha = 0
+        total = 0
+    
+    return {
+        'daily_alpha': daily_alpha,
+        'hits': hits,
+        'total': total,
+        'contributions': contributions
+    }
+
+
+def calculate_industry_daily_alpha_peer(
+    industry: str,
+    trade_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame
+) -> dict:
+    """
+    Calculate daily alpha for an industry using SECTOR AVERAGE benchmark.
+    Benchmark = Average return of all active stocks in this industry.
+    """
+    # Get active ratings for this industry on this date
+    active_ratings = get_active_ratings_by_industry(recommendations_df, trade_date, industry)
+    
+    if active_ratings.empty:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': [], 'avg_sector_return': 0}
+    
+    # Collect returns for all active tickers in this industry
+    ticker_returns = {}
+    for _, rating in active_ratings.iterrows():
+        ticker = rating['Ticker']
+        if ticker in prices_df.columns and trade_date in prices_df.index:
+            ret = prices_df.loc[trade_date, ticker]
+            if pd.notna(ret):
+                ticker_returns[ticker] = ret
+    
+    if not ticker_returns:
+        return {'daily_alpha': 0, 'hits': 0, 'total': 0, 'contributions': [], 'avg_sector_return': 0}
+    
+    # Calculate average sector return
+    avg_sector_return = np.mean(list(ticker_returns.values()))
+    
+    # Calculate contribution for each rated stock
+    contributions = []
+    hits = 0
+    
+    for _, rating in active_ratings.iterrows():
+        ticker = rating['Ticker']
+        direction = rating['Direction']
+        recommendation = rating['Recommendation']
+        
+        if ticker not in ticker_returns:
+            continue
+        
+        stock_return = ticker_returns[ticker]
+        
+        # Calculate excess return vs sector average
+        excess_return = stock_return - avg_sector_return
+        contribution = direction * excess_return
+        
+        # Check if call was correct
+        is_correct = False
+        if direction > 0 and excess_return > 0:
+            is_correct = True
+        elif direction < 0 and excess_return < 0:
+            is_correct = True
+        
+        if is_correct:
+            hits += 1
+        
+        contributions.append({
+            'ticker': ticker,
+            'recommendation': recommendation,
+            'direction': direction,
+            'stock_return': stock_return,
+            'sector_return': avg_sector_return,
+            'excess_return': excess_return,
+            'contribution': contribution,
+            'is_correct': is_correct
+        })
+    
+    # Calculate daily alpha as average contribution
+    if contributions:
+        daily_alpha = np.mean([c['contribution'] for c in contributions])
+        total = len(contributions)
+    else:
+        daily_alpha = 0
+        total = 0
+    
+    return {
+        'daily_alpha': daily_alpha,
+        'hits': hits,
+        'total': total,
+        'contributions': contributions,
+        'avg_sector_return': avg_sector_return
+    }
+
+
+def calculate_industry_alpha_index(
+    industry: str,
+    start_date: str,
+    end_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    vnindex_returns: pd.Series,
+    trading_dates: list
+) -> pd.DataFrame:
+    """
+    Calculate Alpha Index history for an industry over a date range (vs VnIndex).
+    """
+    results = []
+    index_value = 1.0
+    cumulative_hits = 0
+    cumulative_total = 0
+    
+    for date in trading_dates:
+        if date < start_date or date > end_date:
+            continue
+        
+        daily_result = calculate_industry_daily_alpha(
+            industry, date, recommendations_df, prices_df, vnindex_returns
+        )
+        
+        daily_alpha = daily_result['daily_alpha']
+        hits = daily_result['hits']
+        total = daily_result['total']
+        
+        # Update index value (compound)
+        index_value = index_value * (1 + daily_alpha / 100)
+        
+        # Update cumulative counts
+        cumulative_hits += hits
+        cumulative_total += total
+        
+        results.append({
+            'date': date,
+            'daily_alpha': daily_alpha,
+            'index_value': index_value,
+            'hits': hits,
+            'total': total,
+            'cumulative_hits': cumulative_hits,
+            'cumulative_total': cumulative_total
+        })
+    
+    return pd.DataFrame(results)
+
+
+def calculate_industry_alpha_index_peer(
+    industry: str,
+    start_date: str,
+    end_date: str,
+    recommendations_df: pd.DataFrame,
+    prices_df: pd.DataFrame,
+    trading_dates: list
+) -> pd.DataFrame:
+    """
+    Calculate Alpha Index history for an industry using SECTOR AVERAGE benchmark.
+    """
+    results = []
+    index_value = 1.0
+    cumulative_hits = 0
+    cumulative_total = 0
+    
+    for date in trading_dates:
+        if date < start_date or date > end_date:
+            continue
+        
+        daily_result = calculate_industry_daily_alpha_peer(
+            industry, date, recommendations_df, prices_df
+        )
+        
+        daily_alpha = daily_result['daily_alpha']
+        hits = daily_result['hits']
+        total = daily_result['total']
+        
+        # Update index value (compound)
+        index_value = index_value * (1 + daily_alpha / 100)
+        
+        # Update cumulative counts
+        cumulative_hits += hits
+        cumulative_total += total
+        
+        results.append({
+            'date': date,
+            'daily_alpha': daily_alpha,
+            'index_value': index_value,
+            'hits': hits,
+            'total': total,
+            'cumulative_hits': cumulative_hits,
+            'cumulative_total': cumulative_total
+        })
+    
+    return pd.DataFrame(results)
+
+
+def calculate_industry_summary(
+    industry: str,
+    alpha_history: pd.DataFrame
+) -> dict:
+    """
+    Calculate summary metrics for an industry from its alpha history.
+    """
+    if alpha_history.empty:
+        return {
+            'industry': industry,
+            'index_value': 1.0,
+            'ytd_alpha': 0,
+            'hit_rate': 0,
+            'information_ratio': None,
+            'daily_alphas': []
+        }
+    
+    # Latest values
+    latest = alpha_history.iloc[-1]
+    index_value = latest['index_value']
+    ytd_alpha = (index_value - 1) * 100
+    
+    # Hit rate
+    cumulative_hits = latest['cumulative_hits']
+    cumulative_total = latest['cumulative_total']
+    hit_rate = (cumulative_hits / cumulative_total * 100) if cumulative_total > 0 else 0
+    
+    # Information Ratio
+    daily_alphas = alpha_history['daily_alpha'].tolist()
+    if len(daily_alphas) >= 20:
+        mean_alpha = np.mean(daily_alphas)
+        std_alpha = np.std(daily_alphas)
+        information_ratio = mean_alpha / std_alpha if std_alpha > 0 else 0
+    else:
+        information_ratio = None
+    
+    return {
+        'industry': industry,
+        'index_value': index_value,
+        'ytd_alpha': ytd_alpha,
+        'hit_rate': hit_rate,
+        'information_ratio': information_ratio,
+        'daily_alphas': daily_alphas
+    }
+

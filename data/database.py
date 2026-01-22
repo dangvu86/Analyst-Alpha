@@ -38,7 +38,7 @@ def get_all_recommendations() -> pd.DataFrame:
     """Get all recommendations from database."""
     conn = get_recommendations_connection()
     query = """
-        SELECT Ticker, Date, Recommendation, Analyst
+        SELECT Ticker, Date, Recommendation, Analyst, Sector, Industry
         FROM RecommendationHistory
         ORDER BY Analyst, Date
     """

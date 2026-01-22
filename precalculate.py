@@ -32,7 +32,11 @@ from data.calculations import (
     calculate_daily_returns, calculate_analyst_alpha_index,
     calculate_analyst_summary, get_active_ratings_on_date,
     calculate_analyst_daily_alpha, calculate_analyst_daily_alpha_peer,
-    calculate_analyst_alpha_index_peer
+    calculate_analyst_alpha_index_peer,
+    # Industry Alpha functions
+    get_active_ratings_by_industry, calculate_industry_daily_alpha,
+    calculate_industry_daily_alpha_peer, calculate_industry_alpha_index,
+    calculate_industry_alpha_index_peer, calculate_industry_summary
 )
 
 # Output database
@@ -183,9 +187,124 @@ def create_alpha_index_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_contrib_analyst ON PeerDailyContributions(analyst_email)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_peer_contrib_date ON PeerDailyContributions(trade_date)")
     
+    # ===== INDUSTRY ALPHA TABLES =====
+    
+    # Table for industry daily alpha history (vs VnIndex)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustryAlphaDaily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            daily_alpha REAL,
+            index_value REAL,
+            hits INTEGER,
+            total INTEGER,
+            cumulative_hits INTEGER,
+            cumulative_total INTEGER,
+            UNIQUE(industry, trade_date)
+        )
+    """)
+    
+    # Table for industry summary (vs VnIndex)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustrySummary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            index_value REAL,
+            ytd_alpha REAL,
+            hit_rate REAL,
+            information_ratio REAL,
+            coverage INTEGER,
+            opf_count INTEGER,
+            upf_count INTEGER,
+            mpf_count INTEGER,
+            UNIQUE(industry, as_of_date)
+        )
+    """)
+    
+    # Table for industry daily contributions (vs VnIndex)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustryDailyContributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            recommendation TEXT,
+            direction_weight REAL,
+            stock_return REAL,
+            vnindex_return REAL,
+            excess_return REAL,
+            contribution REAL,
+            is_correct INTEGER,
+            UNIQUE(industry, trade_date, ticker)
+        )
+    """)
+    
+    # Table for industry peer-based alpha (vs Sector Average)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustryPeerAlphaDaily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            daily_alpha REAL,
+            index_value REAL,
+            hits INTEGER,
+            total INTEGER,
+            cumulative_hits INTEGER,
+            cumulative_total INTEGER,
+            UNIQUE(industry, trade_date)
+        )
+    """)
+    
+    # Table for industry peer summary (vs Sector Average)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustryPeerSummary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            as_of_date TEXT NOT NULL,
+            index_value REAL,
+            ytd_alpha REAL,
+            hit_rate REAL,
+            information_ratio REAL,
+            coverage INTEGER,
+            opf_count INTEGER,
+            upf_count INTEGER,
+            mpf_count INTEGER,
+            UNIQUE(industry, as_of_date)
+        )
+    """)
+    
+    # Table for industry peer daily contributions (vs Sector Average)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS IndustryPeerDailyContributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            industry TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            recommendation TEXT,
+            direction_weight REAL,
+            stock_return REAL,
+            sector_return REAL,
+            excess_return REAL,
+            contribution REAL,
+            is_correct INTEGER,
+            UNIQUE(industry, trade_date, ticker)
+        )
+    """)
+    
+    # Indexes for industry tables
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_alpha_industry ON IndustryAlphaDaily(industry)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_alpha_date ON IndustryAlphaDaily(trade_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_summary_industry ON IndustrySummary(industry)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_contrib_industry ON IndustryDailyContributions(industry)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_peer_alpha_industry ON IndustryPeerAlphaDaily(industry)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_peer_summary_industry ON IndustryPeerSummary(industry)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ind_peer_contrib_industry ON IndustryPeerDailyContributions(industry)")
+    
     conn.commit()
     conn.close()
-    print("✅ Created alpha_index.db with tables (including Peer Comparison)")
+    print("✅ Created alpha_index.db with tables (including Peer Comparison and Industry Alpha)")
 
 
 def load_source_data(start_date_str: str, end_date_str: str) -> dict:
@@ -458,6 +577,208 @@ def calculate_and_save(start_date_str: str, end_date_str: str):
     conn.close()
     
     print(f"\n✅ DONE! Saved {total_records} records for {valid_analysts} analysts to alpha_index.db")
+    
+    # ===== CALCULATE INDUSTRY ALPHA =====
+    calculate_and_save_industry_alpha(start_date_str, end_date_str, data)
+
+
+def calculate_and_save_industry_alpha(start_date_str: str, end_date_str: str, data: dict):
+    """Calculate Alpha Index for all industries and save to database."""
+    
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    # Clear existing industry data
+    conn.execute("DELETE FROM IndustryAlphaDaily")
+    conn.execute("DELETE FROM IndustrySummary")
+    conn.execute("DELETE FROM IndustryDailyContributions")
+    conn.execute("DELETE FROM IndustryPeerAlphaDaily")
+    conn.execute("DELETE FROM IndustryPeerSummary")
+    conn.execute("DELETE FROM IndustryPeerDailyContributions")
+    conn.commit()
+    
+    # Get unique industries from recommendations
+    industries = data['recommendations']['Industry'].dropna().unique().tolist()
+    
+    print(f"\n🔄 Calculating Industry Alpha for {len(industries)} industries...")
+    
+    total_industry_records = 0
+    valid_industries = 0
+    
+    for i, industry in enumerate(industries):
+        if not industry:
+            continue
+        
+        print(f"   [{i+1}/{len(industries)}] Processing {industry}...", end=" ")
+        
+        # Calculate industry alpha history (vs VnIndex)
+        alpha_history = calculate_industry_alpha_index(
+            industry, start_date_str, end_date_str,
+            data['recommendations'], data['returns'],
+            data['vnindex_returns'], data['trading_dates']
+        )
+        
+        if alpha_history.empty:
+            print("⏭️ No data")
+            continue
+        
+        # Save daily alpha to database
+        for _, row in alpha_history.iterrows():
+            conn.execute("""
+                INSERT OR REPLACE INTO IndustryAlphaDaily 
+                (industry, trade_date, daily_alpha, index_value, hits, total, cumulative_hits, cumulative_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                industry,
+                row['date'],
+                row['daily_alpha'],
+                row['index_value'],
+                row['hits'],
+                row['total'],
+                row['cumulative_hits'],
+                row['cumulative_total']
+            ))
+        
+        # Save stock-level contributions for each trading day
+        for trade_date in data['trading_dates']:
+            if trade_date < start_date_str or trade_date > end_date_str:
+                continue
+            
+            daily_result = calculate_industry_daily_alpha(
+                industry, trade_date, data['recommendations'], 
+                data['returns'], data['vnindex_returns']
+            )
+            
+            for contrib in daily_result['contributions']:
+                conn.execute("""
+                    INSERT OR REPLACE INTO IndustryDailyContributions
+                    (industry, trade_date, ticker, recommendation, direction_weight,
+                     stock_return, vnindex_return, excess_return, contribution, is_correct)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    industry,
+                    trade_date,
+                    contrib['ticker'],
+                    contrib['recommendation'],
+                    contrib['direction'],
+                    contrib['stock_return'],
+                    contrib['vnindex_return'],
+                    contrib['excess_return'],
+                    contrib['contribution'],
+                    1 if contrib['is_correct'] else 0
+                ))
+        
+        total_industry_records += len(alpha_history)
+        
+        # Calculate summary
+        summary = calculate_industry_summary(industry, alpha_history)
+        
+        # Get rating distribution
+        active_ratings = get_active_ratings_by_industry(
+            data['recommendations'], end_date_str, industry
+        )
+        
+        opf_count = len(active_ratings[active_ratings['Direction'] > 0]) if not active_ratings.empty else 0
+        upf_count = len(active_ratings[active_ratings['Direction'] == -1.0]) if not active_ratings.empty else 0
+        mpf_count = len(active_ratings[active_ratings['Direction'] == -0.3]) if not active_ratings.empty else 0
+        total_count = len(active_ratings) if not active_ratings.empty else 0
+        
+        # Save summary
+        conn.execute("""
+            INSERT OR REPLACE INTO IndustrySummary
+            (industry, as_of_date, index_value, ytd_alpha, hit_rate, 
+             information_ratio, coverage, opf_count, upf_count, mpf_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            industry,
+            end_date_str,
+            summary['index_value'],
+            summary['ytd_alpha'],
+            summary['hit_rate'],
+            summary['information_ratio'],
+            total_count,
+            opf_count,
+            upf_count,
+            mpf_count
+        ))
+        
+        # ===== PEER-BASED (Sector Average) =====
+        
+        peer_alpha_history = calculate_industry_alpha_index_peer(
+            industry, start_date_str, end_date_str,
+            data['recommendations'], data['returns'], data['trading_dates']
+        )
+        
+        for _, row in peer_alpha_history.iterrows():
+            conn.execute("""
+                INSERT OR REPLACE INTO IndustryPeerAlphaDaily 
+                (industry, trade_date, daily_alpha, index_value, hits, total, cumulative_hits, cumulative_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                industry,
+                row['date'],
+                row['daily_alpha'],
+                row['index_value'],
+                row['hits'],
+                row['total'],
+                row['cumulative_hits'],
+                row['cumulative_total']
+            ))
+        
+        # Save peer stock-level contributions
+        for trade_date in data['trading_dates']:
+            if trade_date < start_date_str or trade_date > end_date_str:
+                continue
+            
+            peer_daily_result = calculate_industry_daily_alpha_peer(
+                industry, trade_date, data['recommendations'], data['returns']
+            )
+            
+            for contrib in peer_daily_result['contributions']:
+                conn.execute("""
+                    INSERT OR REPLACE INTO IndustryPeerDailyContributions
+                    (industry, trade_date, ticker, recommendation, direction_weight,
+                     stock_return, sector_return, excess_return, contribution, is_correct)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    industry,
+                    trade_date,
+                    contrib['ticker'],
+                    contrib['recommendation'],
+                    contrib['direction'],
+                    contrib['stock_return'],
+                    contrib['sector_return'],
+                    contrib['excess_return'],
+                    contrib['contribution'],
+                    1 if contrib['is_correct'] else 0
+                ))
+        
+        peer_summary = calculate_industry_summary(industry, peer_alpha_history)
+        
+        conn.execute("""
+            INSERT OR REPLACE INTO IndustryPeerSummary
+            (industry, as_of_date, index_value, ytd_alpha, hit_rate, 
+             information_ratio, coverage, opf_count, upf_count, mpf_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            industry,
+            end_date_str,
+            peer_summary['index_value'],
+            peer_summary['ytd_alpha'],
+            peer_summary['hit_rate'],
+            peer_summary['information_ratio'],
+            total_count,
+            opf_count,
+            upf_count,
+            mpf_count
+        ))
+        
+        valid_industries += 1
+        print(f"✅ {len(alpha_history)} days, VnIndex={summary['index_value']:.2f}, SectorAvg={peer_summary['index_value']:.2f}")
+    
+    conn.commit()
+    conn.close()
+    
+    print(f"\n✅ INDUSTRY ALPHA DONE! Saved {total_industry_records} records for {valid_industries} industries")
 
 
 def main():

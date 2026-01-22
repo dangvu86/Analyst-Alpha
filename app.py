@@ -384,6 +384,147 @@ def get_peer_available_dates(analyst_email: str) -> list:
     return df['trade_date'].tolist()
 
 
+# ===== INDUSTRY ALPHA DATA LOADING FUNCTIONS =====
+
+@st.cache_data(ttl=3600)
+def load_industry_scorecard() -> pd.DataFrame:
+    """Load industry scorecard from pre-calculated database (vs VnIndex)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    table_check = pd.read_sql_query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='IndustrySummary'", conn
+    )
+    if table_check.empty:
+        conn.close()
+        return pd.DataFrame()
+    
+    latest_date = pd.read_sql_query(
+        "SELECT MAX(as_of_date) as max_date FROM IndustrySummary", conn
+    ).iloc[0]['max_date']
+    
+    df = pd.read_sql_query("""
+        SELECT industry, index_value, ytd_alpha, hit_rate, information_ratio,
+               coverage, opf_count, upf_count, mpf_count
+        FROM IndustrySummary WHERE as_of_date = ? ORDER BY index_value DESC
+    """, conn, params=(latest_date,))
+    conn.close()
+    
+    if not df.empty:
+        df['rank'] = range(1, len(df) + 1)
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_industry_history(industry: str) -> pd.DataFrame:
+    """Load alpha history for a specific industry (vs VnIndex)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    df = pd.read_sql_query("""
+        SELECT trade_date as date, daily_alpha, index_value, hits, total,
+               cumulative_hits, cumulative_total
+        FROM IndustryAlphaDaily WHERE industry = ? ORDER BY trade_date
+    """, conn, params=(industry,))
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_industry_daily_contributions(industry: str, trade_date: str = None) -> pd.DataFrame:
+    """Load stock-level contributions for an industry."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    if trade_date:
+        df = pd.read_sql_query("""
+            SELECT trade_date, ticker, recommendation, direction_weight, stock_return,
+                   vnindex_return, excess_return, contribution, is_correct
+            FROM IndustryDailyContributions WHERE industry = ? AND trade_date = ?
+            ORDER BY contribution DESC
+        """, conn, params=(industry, trade_date))
+    else:
+        df = pd.read_sql_query("""
+            SELECT trade_date, ticker, recommendation, direction_weight, stock_return,
+                   vnindex_return, excess_return, contribution, is_correct
+            FROM IndustryDailyContributions WHERE industry = ?
+            ORDER BY trade_date DESC, contribution DESC
+        """, conn, params=(industry,))
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_industry_peer_scorecard() -> pd.DataFrame:
+    """Load industry scorecard (vs Sector Average)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    
+    table_check = pd.read_sql_query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='IndustryPeerSummary'", conn
+    )
+    if table_check.empty:
+        conn.close()
+        return pd.DataFrame()
+    
+    latest_date = pd.read_sql_query(
+        "SELECT MAX(as_of_date) as max_date FROM IndustryPeerSummary", conn
+    ).iloc[0]['max_date']
+    
+    df = pd.read_sql_query("""
+        SELECT industry, index_value, ytd_alpha, hit_rate, information_ratio,
+               coverage, opf_count, upf_count, mpf_count
+        FROM IndustryPeerSummary WHERE as_of_date = ? ORDER BY index_value DESC
+    """, conn, params=(latest_date,))
+    conn.close()
+    
+    if not df.empty:
+        df['rank'] = range(1, len(df) + 1)
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_industry_peer_history(industry: str) -> pd.DataFrame:
+    """Load alpha history for an industry (vs Sector Average)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    df = pd.read_sql_query("""
+        SELECT trade_date as date, daily_alpha, index_value, hits, total,
+               cumulative_hits, cumulative_total
+        FROM IndustryPeerAlphaDaily WHERE industry = ? ORDER BY trade_date
+    """, conn, params=(industry,))
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def load_industry_peer_contributions(industry: str, trade_date: str = None) -> pd.DataFrame:
+    """Load stock-level contributions for an industry (vs Sector Average)."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    if trade_date:
+        df = pd.read_sql_query("""
+            SELECT trade_date, ticker, recommendation, direction_weight, stock_return,
+                   sector_return, excess_return, contribution, is_correct
+            FROM IndustryPeerDailyContributions WHERE industry = ? AND trade_date = ?
+            ORDER BY contribution DESC
+        """, conn, params=(industry, trade_date))
+    else:
+        df = pd.read_sql_query("""
+            SELECT trade_date, ticker, recommendation, direction_weight, stock_return,
+                   sector_return, excess_return, contribution, is_correct
+            FROM IndustryPeerDailyContributions WHERE industry = ?
+            ORDER BY trade_date DESC, contribution DESC
+        """, conn, params=(industry,))
+    conn.close()
+    return df
+
+
+@st.cache_data(ttl=3600)
+def get_industry_available_dates(industry: str, use_peer: bool = False) -> list:
+    """Get list of available trading dates for an industry."""
+    conn = sqlite3.connect(ALPHA_INDEX_DB)
+    table = "IndustryPeerDailyContributions" if use_peer else "IndustryDailyContributions"
+    df = pd.read_sql_query(f"""
+        SELECT DISTINCT trade_date FROM {table} WHERE industry = ?
+        ORDER BY trade_date DESC
+    """, conn, params=(industry,))
+    conn.close()
+    return df['trade_date'].tolist() if not df.empty else []
+
+
 def main():
     """Main application."""
     st.markdown('<h1 class="main-header">📊 Analyst Alpha Dashboard <span class="fast-badge">⚡ Fast</span></h1>', 
@@ -423,13 +564,15 @@ def main():
     st.sidebar.title("⚙️ Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["📊 Performance Overview", "🔄 Peer Comparison", "📋 Calculation Detail", "🏆 Leaderboard"]
+        ["📊 Performance Overview", "🔄 Peer Comparison", "🏭 Industry Alpha", "📋 Calculation Detail", "🏆 Leaderboard"]
     )
     
     if page == "📊 Performance Overview":
         render_performance_overview(scorecard, meta)
     elif page == "🔄 Peer Comparison":
         render_peer_comparison(peer_scorecard, meta)
+    elif page == "🏭 Industry Alpha":
+        render_industry_alpha(meta)
     elif page == "📋 Calculation Detail":
         render_calculation_detail(scorecard, peer_scorecard)
     elif page == "🏆 Leaderboard":
@@ -622,6 +765,134 @@ def render_peer_comparison(peer_scorecard: pd.DataFrame, meta: dict):
     display_df['Hit Rate %'] = display_df['Hit Rate %'].apply(lambda x: f"{x:.1f}")
     display_df['Info Ratio'] = display_df['Info Ratio'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "N/A")
     display_df['Conviction %'] = display_df['Conviction %'].apply(lambda x: f"{x:.1f}")
+    
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
+def render_industry_alpha(meta: dict):
+    """Render Industry Alpha page - Alpha by Industry."""
+    st.subheader("🏭 Industry Alpha")
+    
+    st.info("""
+    **Industry Alpha** tính toán hiệu suất theo **Industry** thay vì theo Analyst.
+    Tất cả cổ phiếu trong cùng một ngành được gom nhóm lại để tính Alpha Index.
+    """)
+    
+    # Load industry scorecards
+    industry_scorecard = load_industry_scorecard()
+    industry_peer_scorecard = load_industry_peer_scorecard()
+    
+    if industry_scorecard.empty:
+        st.warning("⚠️ Industry Alpha data not found. Please run `python precalculate.py` to generate data.")
+        return
+    
+    # Tabs for benchmark selection
+    tab1, tab2 = st.tabs(["📊 vs VnIndex", "🔄 vs Sector Average"])
+    
+    with tab1:
+        render_industry_alpha_tab(industry_scorecard, meta, use_peer=False)
+    
+    with tab2:
+        render_industry_alpha_tab(industry_peer_scorecard, meta, use_peer=True)
+
+
+def render_industry_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool = False):
+    """Render Industry Alpha tab content."""
+    if scorecard.empty:
+        st.warning("No data available.")
+        return
+    
+    benchmark_label = "Sector Average" if use_peer else "VnIndex"
+    
+    # Industry selector
+    industries = scorecard['industry'].tolist()
+    selected_industry = st.selectbox(
+        "Select Industry",
+        industries,
+        key=f"industry_selector_{'peer' if use_peer else 'vnindex'}"
+    )
+    
+    st.markdown("---")
+    
+    # Load and display chart
+    if use_peer:
+        alpha_history = load_industry_peer_history(selected_industry)
+    else:
+        alpha_history = load_industry_history(selected_industry)
+    
+    if not alpha_history.empty and meta:
+        from components.charts import create_peer_alpha_chart
+        
+        if use_peer:
+            fig = create_peer_alpha_chart(
+                alpha_history,
+                title=f"Industry Alpha - {selected_industry} (vs Sector Avg)"
+            )
+        else:
+            # Load VnIndex for comparison
+            vnindex = load_vnindex_normalized(meta['start_date'], meta['end_date'])
+            if not vnindex.empty:
+                fig = create_alpha_vs_vnindex_chart(
+                    alpha_history, vnindex,
+                    title=f"Industry Alpha - {selected_industry} (vs VnIndex)"
+                )
+            else:
+                fig = create_peer_alpha_chart(
+                    alpha_history,
+                    title=f"Industry Alpha - {selected_industry}"
+                )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # Stock Detail Table
+    st.subheader(f"📋 Stock Details - {selected_industry}")
+    
+    # Date selector
+    available_dates = get_industry_available_dates(selected_industry, use_peer)
+    if not available_dates:
+        st.info("No stock detail data available.")
+        return
+    
+    selected_date = st.selectbox(
+        "Select Date",
+        available_dates,
+        key=f"industry_date_{'peer' if use_peer else 'vnindex'}"
+    )
+    
+    # Load contributions
+    if use_peer:
+        contributions = load_industry_peer_contributions(selected_industry, selected_date)
+        benchmark_col = "sector_return"
+    else:
+        contributions = load_industry_daily_contributions(selected_industry, selected_date)
+        benchmark_col = "vnindex_return"
+    
+    if contributions.empty:
+        st.info(f"No data for {selected_date}")
+        return
+    
+    display_df = contributions.copy()
+    display_df = display_df.drop(columns=['trade_date'])
+    
+    col_rename = {
+        'ticker': 'Ticker',
+        'recommendation': 'Rating',
+        'direction_weight': 'Direction',
+        'stock_return': 'Stock %',
+        benchmark_col: f'{benchmark_label} %',
+        'excess_return': 'Excess %',
+        'contribution': 'Contrib %',
+        'is_correct': '✓'
+    }
+    display_df = display_df.rename(columns=col_rename)
+    
+    display_df['Stock %'] = display_df['Stock %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "N/A")
+    display_df[f'{benchmark_label} %'] = display_df[f'{benchmark_label} %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "N/A")
+    display_df['Excess %'] = display_df['Excess %'].apply(lambda x: f"{x:+.2f}" if pd.notna(x) else "N/A")
+    display_df['Contrib %'] = display_df['Contrib %'].apply(lambda x: f"{x:+.4f}" if pd.notna(x) else "N/A")
+    display_df['Direction'] = display_df['Direction'].apply(lambda x: f"{x:+.1f}")
+    display_df['✓'] = display_df['✓'].apply(lambda x: "✅" if x == 1 else "❌")
     
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
