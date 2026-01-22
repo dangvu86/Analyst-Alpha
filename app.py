@@ -699,6 +699,9 @@ def load_daily_scorecard(trade_date: str) -> pd.DataFrame:
         conn.close()
         return pd.DataFrame()
         
+    # Standardize email for merging
+    df['email_key'] = df['analyst_email'].str.lower().str.strip()
+
     # 2. Coverage & Conviction (from DailyContributions on that date)
     contrib_df = pd.read_sql_query("""
         SELECT analyst_email, direction_weight
@@ -706,26 +709,26 @@ def load_daily_scorecard(trade_date: str) -> pd.DataFrame:
         WHERE trade_date = ?
     """, conn, params=(trade_date,))
     
-    # Calculate coverage and conviction per analyst
     metrics = []
-    for email, group in contrib_df.groupby('analyst_email'):
-        total = len(group)
-        # Assuming: >0 is OPT (Buy), -1 is UPF (Sell), -0.3 is MPF (Hold)
-        # Conviction = (OPT + UPF) / Total
-        opf = len(group[group['direction_weight'] > 0])
-        upf = len(group[group['direction_weight'] == -1.0])
-        
-        conviction = ((opf + upf) / total * 100) if total > 0 else 0
-        metrics.append({
-            'analyst_email': email,
-            'coverage': total,
-            'conviction': conviction
-        })
+    if not contrib_df.empty:
+        for email, group in contrib_df.groupby('analyst_email'):
+            total = len(group)
+            opf = len(group[group['direction_weight'] > 0])
+            upf = len(group[group['direction_weight'] == -1.0])
+            
+            conviction = ((opf + upf) / total * 100) if total > 0 else 0
+            metrics.append({
+                'email_key': email.lower().strip(),
+                'coverage': total,
+                'conviction': conviction
+            })
     
-    metrics_df = pd.DataFrame(metrics)
+    if metrics:
+        metrics_df = pd.DataFrame(metrics)
+    else:
+        metrics_df = pd.DataFrame(columns=['email_key', 'coverage', 'conviction'])
     
     # 3. Information Ratio (History up to date)
-    # We need at least 20 days. Fetch all history <= date
     history_df = pd.read_sql_query("""
         SELECT analyst_email, daily_alpha
         FROM AnalystAlphaDaily
@@ -733,28 +736,39 @@ def load_daily_scorecard(trade_date: str) -> pd.DataFrame:
     """, conn, params=(trade_date,))
     
     ir_metrics = []
-    for email, group in history_df.groupby('analyst_email'):
-        if len(group) >= 20:
-            avg = group['daily_alpha'].mean()
-            std = group['daily_alpha'].std()
-            ir = avg / std if std > 0 else 0
-        else:
-            ir = None
-        
-        ir_metrics.append({
-            'analyst_email': email,
-            'information_ratio': ir
-        })
-        
-    ir_df = pd.DataFrame(ir_metrics)
+    if not history_df.empty:
+        for email, group in history_df.groupby('analyst_email'):
+            if len(group) >= 20:
+                avg = group['daily_alpha'].mean()
+                std = group['daily_alpha'].std()
+                ir = avg / std if std > 0 else 0
+            else:
+                ir = None
+            
+            ir_metrics.append({
+                'email_key': email.lower().strip(),
+                'information_ratio': ir
+            })
+            
+    if ir_metrics:
+        ir_df = pd.DataFrame(ir_metrics)
+    else:
+        ir_df = pd.DataFrame(columns=['email_key', 'information_ratio'])
+
     conn.close()
     
-    # Merge all
-    if not metrics_df.empty:
-        df = df.merge(metrics_df, on='analyst_email', how='left')
+    # Merge all on email_key
+    df = df.merge(metrics_df, on='email_key', how='left')
+    df = df.merge(ir_df, on='email_key', how='left')
     
-    if not ir_df.empty:
-        df = df.merge(ir_df, on='analyst_email', how='left')
+    # Fill N/A for Coverage/Conviction if missing (implies 0 activity)
+    df['coverage'] = df['coverage'].fillna(0)
+    # If coverage is 0, conviction is N/A or 0. Let's set to N/A if coverage is 0? 
+    # Or just keep NaN and let formatter handle it.
+    
+    # Cleanup keys
+    if 'email_key' in df.columns:
+        df = df.drop(columns=['email_key'])
         
     # Calculate derived metrics
     df['total_alpha'] = (df['index_value'] - 1) * 100
@@ -782,6 +796,9 @@ def load_peer_daily_scorecard(trade_date: str) -> pd.DataFrame:
         conn.close()
         return pd.DataFrame()
 
+    # Standardize email
+    df['email_key'] = df['analyst_email'].str.lower().str.strip()
+
     # 2. Coverage & Conviction
     contrib_df = pd.read_sql_query("""
         SELECT analyst_email, direction_weight
@@ -790,19 +807,23 @@ def load_peer_daily_scorecard(trade_date: str) -> pd.DataFrame:
     """, conn, params=(trade_date,))
     
     metrics = []
-    for email, group in contrib_df.groupby('analyst_email'):
-        total = len(group)
-        opf = len(group[group['direction_weight'] > 0])
-        upf = len(group[group['direction_weight'] == -1.0])
-        
-        conviction = ((opf + upf) / total * 100) if total > 0 else 0
-        metrics.append({
-            'analyst_email': email,
-            'coverage': total,
-            'conviction': conviction
-        })
+    if not contrib_df.empty:
+        for email, group in contrib_df.groupby('analyst_email'):
+            total = len(group)
+            opf = len(group[group['direction_weight'] > 0])
+            upf = len(group[group['direction_weight'] == -1.0])
+            
+            conviction = ((opf + upf) / total * 100) if total > 0 else 0
+            metrics.append({
+                'email_key': email.lower().strip(),
+                'coverage': total,
+                'conviction': conviction
+            })
     
-    metrics_df = pd.DataFrame(metrics)
+    if metrics:
+        metrics_df = pd.DataFrame(metrics)
+    else:
+        metrics_df = pd.DataFrame(columns=['email_key', 'coverage', 'conviction'])
     
     # 3. Information Ratio
     history_df = pd.read_sql_query("""
@@ -812,28 +833,36 @@ def load_peer_daily_scorecard(trade_date: str) -> pd.DataFrame:
     """, conn, params=(trade_date,))
     
     ir_metrics = []
-    for email, group in history_df.groupby('analyst_email'):
-        if len(group) >= 20:
-            avg = group['daily_alpha'].mean()
-            std = group['daily_alpha'].std()
-            ir = avg / std if std > 0 else 0
-        else:
-            ir = None
+    if not history_df.empty:
+        for email, group in history_df.groupby('analyst_email'):
+            if len(group) >= 20:
+                avg = group['daily_alpha'].mean()
+                std = group['daily_alpha'].std()
+                ir = avg / std if std > 0 else 0
+            else:
+                ir = None
+                
+            ir_metrics.append({
+                'email_key': email.lower().strip(),
+                'information_ratio': ir
+            })
             
-        ir_metrics.append({
-            'analyst_email': email,
-            'information_ratio': ir
-        })
+    if ir_metrics:
+        ir_df = pd.DataFrame(ir_metrics)
+    else:
+        ir_df = pd.DataFrame(columns=['email_key', 'information_ratio'])
         
-    ir_df = pd.DataFrame(ir_metrics)
     conn.close()
     
     # Merge
-    if not metrics_df.empty:
-        df = df.merge(metrics_df, on='analyst_email', how='left')
-        
-    if not ir_df.empty:
-        df = df.merge(ir_df, on='analyst_email', how='left')
+    df = df.merge(metrics_df, on='email_key', how='left')
+    df = df.merge(ir_df, on='email_key', how='left')
+    
+    # Fill defaults
+    df['coverage'] = df['coverage'].fillna(0)
+    
+    if 'email_key' in df.columns:
+        df = df.drop(columns=['email_key'])
         
     # Derived
     df['total_alpha'] = (df['index_value'] - 1) * 100
