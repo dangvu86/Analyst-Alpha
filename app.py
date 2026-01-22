@@ -16,12 +16,7 @@ import os
 import sys
 import plotly.graph_objects as go
 from datetime import datetime
-try:
-    import gdown
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "gdown"])
-    import gdown
+import gdown
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
