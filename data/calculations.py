@@ -13,8 +13,21 @@ def get_direction_weight(recommendation: str) -> float:
 
 
 def calculate_daily_returns(prices_df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate daily returns from price dataframe."""
-    returns = prices_df.pct_change() * 100  # Convert to percentage
+    """
+    Calculate daily returns from price dataframe.
+    
+    IMPORTANT: Only calculates return if stock has price on BOTH today AND previous day.
+    If previous day price is NaN (stock not traded), today's return will be NaN.
+    This prevents incorrect returns for newly listed stocks or stocks with gaps.
+    """
+    # Get previous day prices (shift by 1)
+    prev_prices = prices_df.shift(1)
+    
+    # Calculate returns only where both today and yesterday have valid prices
+    # This ensures we don't calculate returns across gaps
+    returns = (prices_df / prev_prices - 1) * 100
+    
+    # Returns will automatically be NaN if either today or yesterday is NaN
     return returns
 
 
