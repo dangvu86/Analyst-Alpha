@@ -140,6 +140,9 @@ def load_scorecard() -> pd.DataFrame:
     # Add rank
     df['rank'] = range(1, len(df) + 1)
     
+    # Calculate total_alpha from index_value
+    df['total_alpha'] = (df['index_value'] - 1) * 100
+    
     return df
 
 
@@ -361,6 +364,9 @@ def load_peer_scorecard() -> pd.DataFrame:
     
     # Add rank
     df['rank'] = range(1, len(df) + 1)
+    
+    # Calculate total_alpha from index_value
+    df['total_alpha'] = (df['index_value'] - 1) * 100
     
     return df
 
