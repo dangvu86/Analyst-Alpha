@@ -63,7 +63,7 @@ def sync_db_from_drive():
                 st.stop()
 
 # Sync DB on startup
-# sync_db_from_drive()
+sync_db_from_drive()
 
 
 # Page configuration
