@@ -63,7 +63,7 @@ def sync_db_from_drive():
                 st.stop()
 
 # Sync DB on startup
-sync_db_from_drive()
+# sync_db_from_drive()
 
 
 # Page configuration
@@ -925,13 +925,7 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
             
         # Map names back
         current_scorecard['analyst_name'] = current_scorecard['analyst_email'].map(name_map)
-        # For historical, we don't have historical coverage/IR easily available, 
-        # so we can either show current or N/A. Let's show N/A to avoid confusion or keep current if it's static?
-        # Let's keep fields empty or N/A except computed ones.
-        current_scorecard['information_ratio'] = None 
-        current_scorecard['conviction'] = None
-        current_scorecard['coverage'] = None
-    
+        
     st.markdown("---")
         
     # View selector: Team Average or Individual Analyst
@@ -1013,7 +1007,7 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     # Format and Display dynamic scorecard
     display_df = current_scorecard.copy()
     
-    display_cols = ['rank', 'analyst_name', 'index_value', 'total_alpha', 'hit_rate', 
+    display_cols = ['rank', 'analyst_name', 'total_alpha', 'hit_rate', 
                     'information_ratio', 'conviction', 'coverage']
     
     # Filter columns that exist
@@ -1025,7 +1019,6 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     rename_map = {
         'rank': 'Rank',
         'analyst_name': 'Analyst Name',
-        'index_value': 'Alpha Index',
         'total_alpha': 'Total Alpha',
         'ytd_alpha': 'Total Alpha', # Handle legacy name if present
         'hit_rate': 'Hit Rate',
@@ -1041,8 +1034,6 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
     summary_table = summary_table.fillna("N/A")
 
     # Format
-    if 'Alpha Index' in summary_table.columns:
-        summary_table['Alpha Index'] = summary_table['Alpha Index'].apply(lambda x: f"{float(x):.2f}" if x != "N/A" and pd.notna(x) else "N/A")
     if 'Total Alpha' in summary_table.columns:
         summary_table['Total Alpha'] = summary_table['Total Alpha'].apply(lambda x: f"{float(x):+.2f}%" if x != "N/A" and pd.notna(x) else "N/A")
     if 'Hit Rate' in summary_table.columns:
@@ -1053,6 +1044,12 @@ def render_analyst_alpha_tab(scorecard: pd.DataFrame, meta: dict, use_peer: bool
         summary_table['Conviction'] = summary_table['Conviction'].apply(lambda x: f"{float(x):.1f}%" if x != "N/A" and pd.notna(x) else "N/A")
         
     st.dataframe(summary_table, use_container_width=True, hide_index=True)
+    
+    # DEBUG: Check why columns might be N/A
+    # st.write("DEBUG: Raw Joined Data Sample", display_df.head(3))
+    # st.write("DEBUG: Selected Date", selected_date)
+    # st.write(f"DEBUG: Has Coverage? {'coverage' in display_df.columns}")
+    # st.write(f"DEBUG: Has Conviction? {'conviction' in display_df.columns}")
 
     st.markdown("---")
 
